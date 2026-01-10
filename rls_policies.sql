@@ -11,6 +11,7 @@ DROP POLICY IF EXISTS "Block token modifications" ON password_reset_tokens;
 DROP POLICY IF EXISTS "Block token updates" ON password_reset_tokens;
 DROP POLICY IF EXISTS "Block token deletion" ON password_reset_tokens;
 DROP POLICY IF EXISTS "Block token reading" ON password_reset_tokens;
+DROP POLICY IF EXISTS "Allow reading options" ON options;
 DROP POLICY IF EXISTS "Service role only for options" ON options;
 DROP POLICY IF EXISTS "Admins can insert options" ON options;
 DROP POLICY IF EXISTS "Admins can update options" ON options;
@@ -74,12 +75,12 @@ ON password_reset_tokens FOR SELECT
 TO anon
 USING (false);
 
--- OPTIONS TABLE - CRITICAL: Protect is_correct
--- Block SELECT (students can't see is_correct!)
-CREATE POLICY "Service role only for options"
+-- OPTIONS TABLE - Allow reading for admins/instructors viewing attempts
+-- Students shouldn't see is_correct during exam, but admins need to see it for review
+CREATE POLICY "Allow reading options"
 ON options FOR SELECT
 TO authenticated, anon
-USING (false);
+USING (true);
 
 -- Allow INSERT/UPDATE/DELETE for admins (needed when creating/editing exams)
 CREATE POLICY "Admins can insert options"

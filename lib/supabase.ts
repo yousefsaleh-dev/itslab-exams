@@ -60,6 +60,11 @@ export interface StudentAttempt {
     started_at: string
     completed_at: string | null
     last_activity: string
+    // Recovery system fields
+    auto_submitted: boolean
+    auto_submit_reason: string | null
+    recovery_count: number
+    last_recovery_at: string | null
 }
 
 export interface StudentAnswer {

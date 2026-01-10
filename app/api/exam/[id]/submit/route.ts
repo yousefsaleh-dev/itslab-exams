@@ -67,7 +67,7 @@ export async function POST(
 
         // Type assertion for exam data
         const examData = attempt.exam as any
-        
+
         if (!examData || !examData.is_active) {
             return NextResponse.json(
                 { error: 'Exam is no longer active' },
@@ -81,9 +81,20 @@ export async function POST(
         const elapsedSeconds = Math.floor(elapsedMs / 1000)
         const allowedSeconds = examData.duration_minutes * 60
 
-        if (elapsedSeconds > allowedSeconds + 5) {  // 5 second grace period
+        // Grace period: 60 seconds to account for network issues, offline submissions, etc.
+        // This is reasonable because:
+        // - Student might be offline when time expires
+        // - Network reconnection takes time
+        // - Auto-submit retry delays
+        const gracePeriodSeconds = 60
+
+        if (elapsedSeconds > allowedSeconds + gracePeriodSeconds) {
+            console.log(`[Submit] Time limit exceeded: ${elapsedSeconds}s > ${allowedSeconds + gracePeriodSeconds}s`)
             return NextResponse.json(
-                { error: 'Time limit exceeded' },
+                {
+                    error: 'Time limit exceeded. Your exam has been auto-submitted by the system.',
+                    timeExceeded: true
+                },
                 { status: 403 }
             )
         }

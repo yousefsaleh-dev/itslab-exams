@@ -30,6 +30,8 @@ export default function StudentExamPage() {
     const [isOnline, setIsOnline] = useState(true)
     const [syncing, setSyncing] = useState(false)
     const [examError, setExamError] = useState<string | null>(null)
+    const [hasAttemptedSubmit, setHasAttemptedSubmit] = useState(false) // Prevent multiple submit attempts
+    const [submitRetryCount, setSubmitRetryCount] = useState(0)
     const [isExamInactive, setIsExamInactive] = useState(false)
     const [showSubmitModal, setShowSubmitModal] = useState(false)
     const [isSubmitting, setIsSubmitting] = useState(false)
@@ -47,6 +49,7 @@ export default function StudentExamPage() {
     const exitWarningActiveRef = useRef<boolean>(false)
     const submitExamRef = useRef<(() => Promise<void>) | null>(null)
     const lastSyncTimeRef = useRef<number>(0)
+    const submitTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
     // ====== UTILITY FUNCTIONS ======
     const shuffleArray = <T,>(array: T[]): T[] => {
@@ -224,13 +227,6 @@ export default function StudentExamPage() {
                         return
                     }
 
-                    // Check inactivity (15 minutes)
-                    if (timeSinceLastActivity > 900) {
-                        toast.error('Previous session expired due to inactivity')
-                        await autoSubmitExpiredAttempt(incompleteAttempt.id, exam, questions)
-                        return
-                    }
-
                     // Show resume screen
                     localStorage.setItem(`exam_${params.id}_student_name`, examStudentName.trim())
                     setStudentName(examStudentName)
@@ -356,6 +352,26 @@ export default function StudentExamPage() {
 
             if (!response.ok) {
                 const error = await response.json()
+
+                // Special handling for time exceeded after network outage
+                if (response.status === 403 && error.timeExceeded) {
+                    // Time exceeded but within grace period - show result screen
+                    console.log('[Submit] Time exceeded - showing result screen')
+                    toast('Exam submitted after time limit. Results may be affected.', {
+                        icon: '⚠️',
+                        duration: 5000
+                    })
+
+                    // Still try to show results if available
+                    if (error.score !== undefined) {
+                        setScore(error.score)
+                        setTimeSpent(error.timeSpent || 0)
+                    }
+                    setPhase('result')
+                    reset()
+                    return
+                }
+
                 throw new Error(error.error || 'Submission failed')
             }
 
@@ -373,14 +389,45 @@ export default function StudentExamPage() {
             toast.success('Exam submitted successfully!')
 
         } catch (error: any) {
-            // console.error('Submit error:', error)
-            toast.error(error.message || 'Failed to submit exam. Please try again.')
+            console.error('[Submit] Error:', error)
+
+            // Improved error handling with retry logic
+            const isNetworkError = !navigator.onLine || error.message?.includes('fetch')
+
+            if (isNetworkError && submitRetryCount < 3) {
+                // Network error - schedule retry with exponential backoff
+                const retryDelay = Math.min(5000 * Math.pow(2, submitRetryCount), 30000) // Max 30s
+                setSubmitRetryCount(prev => prev + 1)
+
+                toast.error(`Submission failed. Retrying in ${Math.ceil(retryDelay / 1000)}s...`, {
+                    duration: retryDelay
+                })
+
+                // Clear any existing timeout
+                if (submitTimeoutRef.current) {
+                    clearTimeout(submitTimeoutRef.current)
+                }
+
+                // Schedule retry
+                submitTimeoutRef.current = setTimeout(() => {
+                    if (phase === 'exam' && !isSubmitting) {
+                        console.log(`[Submit] Retry attempt ${submitRetryCount + 1}/3`)
+                        submitExamConfirmed()
+                    }
+                }, retryDelay)
+            } else {
+                // Non-network error or max retries reached
+                toast.error(error.message || 'Failed to submit exam. Please try again manually.', {
+                    duration: 8000
+                })
+                setHasAttemptedSubmit(false) // Allow manual retry
+            }
         } finally {
             setSyncing(false)
             setIsSubmitting(false)
             setShowSubmitModal(false)
         }
-    }, [isSubmitting, attemptId, exam, answers, reset])
+    }, [isSubmitting, attemptId, exam, answers, reset, submitRetryCount, phase])
 
     submitExamRef.current = submitExamConfirmed
 
@@ -504,6 +551,77 @@ export default function StudentExamPage() {
         fetchExam()
     }, [])
 
+    // AUTO-RECOVERY: Detect localStorage loss and recover from database
+    useEffect(() => {
+        const attemptAutoRecovery = async () => {
+            // Only attempt recovery if:
+            // 1. We have exam data
+            // 2. We're in 'start' phase
+            // 3. We don't have attemptId in store (localStorage was cleared)
+            // 4. We have a saved student name
+            if (!exam || phase !== 'start' || attemptId) return
+
+            const savedName = localStorage.getItem(`exam_${params.id}_student_name`)
+            if (!savedName) return
+
+            try {
+                console.log('[Auto-Recovery] Attempting to recover exam state...')
+
+                // Call Recovery API
+                const response = await fetch(`/api/exam/${params.id}/recover`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ studentName: savedName })
+                })
+
+                const result = await response.json()
+
+                if (result.success && result.found && result.data) {
+                    console.log('[Auto-Recovery] State recovered successfully!')
+
+                    // Restore all state from recovery data
+                    setAttemptId(result.data.attemptId)
+                    setExitCount(result.data.exitCount)
+                    setStudentName(savedName)
+                    setTimeLeft(result.data.timeRemaining)
+
+                    // Restore answers to store
+                    Object.entries(result.data.answers).forEach(([qId, optId]) => {
+                        setAnswer(qId, optId as string)
+                    })
+
+                    toast.success(`🔄 Session recovered! Time remaining: ${formatTime(result.data.timeRemaining)}`)
+
+                    // Show resume screen
+                    setResumeAttempt({
+                        id: result.data.attemptId,
+                        exit_count: result.data.exitCount,
+                        remainingTime: result.data.timeRemaining,
+                        calculatedAt: Date.now(),
+                        started_at: result.data.startedAt,
+                        last_activity: result.data.lastActivity
+                    } as any)
+                    setPhase('resume')
+
+                } else if (result.expired) {
+                    console.log('[Auto-Recovery] Exam has expired')
+                    toast.error('Your exam has expired')
+                    if (result.found) {
+                        setStudentName(savedName)
+                        setPhase('result')
+                    }
+                } else {
+                    console.log('[Auto-Recovery] No incomplete attempt found')
+                }
+            } catch (error) {
+                console.error('[Auto-Recovery] Failed:', error)
+                toast.error('Failed to recover exam session')
+            }
+        }
+
+        attemptAutoRecovery()
+    }, [exam, phase, attemptId, params.id, setAttemptId, setAnswer, setExitCount])
+
     // Check for saved attempt
     useEffect(() => {
         const checkSavedAttempt = async () => {
@@ -596,7 +714,7 @@ export default function StudentExamPage() {
         if (savedFlags) {
             try {
                 setFlaggedQuestions(JSON.parse(savedFlags))
-            } catch (e) { 
+            } catch (e) {
                 // console.error('Error parsing flags', e)
             }
         }
@@ -652,13 +770,26 @@ export default function StudentExamPage() {
         }
     }, [phase, exitWarningActive, timeLeft])
 
-    // Time expiration
+    // Time expiration - with proper offline handling  
     useEffect(() => {
-        if (phase === 'exam' && timeLeft === 0 && !isSubmitting && submitExamRef.current) {
-            toast.error('Time is up! Auto-submitting exam...')
-            submitExamRef.current()
+        if (phase === 'exam' && timeLeft === 0 && !hasAttemptedSubmit) {
+            setHasAttemptedSubmit(true) // Mark that we've tried to submit
+
+            if (!isOnline) {
+                // Show offline message immediately
+                toast.error('Time is up! Please connect to the internet to submit your exam.', {
+                    duration: 10000 // Show for 10 seconds
+                })
+                // Don't attempt to submit - wait for online
+                return
+            }
+
+            if (!isSubmitting && submitExamRef.current) {
+                toast.error('Time is up! Auto-submitting exam...')
+                submitExamRef.current()
+            }
         }
-    }, [phase, timeLeft, isSubmitting])
+    }, [phase, timeLeft, hasAttemptedSubmit, isSubmitting, isOnline])
 
     // Update last activity and time periodically
     useEffect(() => {
@@ -716,6 +847,16 @@ export default function StudentExamPage() {
         }
     }, [phase])
 
+    // Cleanup submit timeout on unmount
+    useEffect(() => {
+        return () => {
+            if (submitTimeoutRef.current) {
+                clearTimeout(submitTimeoutRef.current)
+                submitTimeoutRef.current = null
+            }
+        }
+    }, [])
+
     // Prevent page close/refresh
     useEffect(() => {
         if (phase !== 'exam') return
@@ -738,15 +879,31 @@ export default function StudentExamPage() {
         return () => window.removeEventListener('beforeunload', handleBeforeUnload)
     }, [phase, attemptId, timeLeft])
 
-    // Network status monitoring
+    // Network status - with auto-submit on reconnection
     useEffect(() => {
         const handleOnline = () => {
             setIsOnline(true)
-            toast.success('Internet connection restored')
+
+            // If time expired while offline,submit now
+            if (phase === 'exam' && timeLeft === 0 && hasAttemptedSubmit && !isSubmitting && submitExamRef.current) {
+                console.log('[Auto-Submit] Back online after time expired - submitting now')
+                toast('Back online! Submitting exam...', {
+                    icon: 'ℹ️',
+                    duration: 3000
+                })
+                setSubmitRetryCount(0) // Reset retry count
+                submitExamRef.current()
+            }
         }
+
         const handleOffline = () => {
             setIsOnline(false)
-            toast.error('Internet connection lost! Exam paused.')
+            if (phase === 'exam') {
+                toast('You are offline. Your answers are saved locally.', {
+                    icon: '⚠️',
+                    duration: 5000
+                })
+            }
         }
 
         window.addEventListener('online', handleOnline)
@@ -757,7 +914,7 @@ export default function StudentExamPage() {
             window.removeEventListener('online', handleOnline)
             window.removeEventListener('offline', handleOffline)
         }
-    }, [])
+    }, [phase, timeLeft, hasAttemptedSubmit, isSubmitting]) // Added dependencies to fix closure issue
 
     // Prevent tab switching / window blur during exam
     useEffect(() => {
@@ -1182,10 +1339,9 @@ export default function StudentExamPage() {
                             </p>
                             <div className="p-4 bg-yellow-50 rounded-xl mb-4 text-sm text-yellow-800 text-left">
                                 <ul className="list-disc pl-4 space-y-1">
-                                    <li>Exam timer is paused</li>
                                     <li>Your answers are saved locally</li>
                                     <li>Will resume when connection is restored</li>
-                                    <li>You have 15 minutes to reconnect</li>
+                                    <li>You have 15 minutes to reconnect, or until the exam timer ends.</li>
                                 </ul>
                             </div>
                             <div className="text-sm text-gray-500">
