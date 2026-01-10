@@ -29,15 +29,23 @@ export default function ExamDetailsPage() {
 
     const fetchExamDetails = async () => {
         try {
-            const { data: examData, error: examError } = await supabase
-                .from('exams')
-                .select('*')
-                .eq('id', params.id)
-                .single()
+            // Use API route to get full exam data (bypasses RLS)
+            const response = await fetch(`/api/exam/${params.id}/details`)
 
-            if (examError) throw examError
-            setExam(examData)
+            if (!response.ok) {
+                throw new Error('Failed to fetch exam')
+            }
 
+            const data = await response.json()
+
+            if (!data.success) {
+                throw new Error(data.error || 'Failed to load exam details')
+            }
+
+            setExam(data.exam)
+            setQuestions(data.questions || [])
+
+            // Fetch attempts separately (no RLS issues here)
             const { data: attemptsData, error: attemptsError } = await supabase
                 .from('student_attempts')
                 .select('*')
@@ -47,17 +55,7 @@ export default function ExamDetailsPage() {
             if (attemptsError) throw attemptsError
             setAttempts(attemptsData || [])
 
-            // Fetch Questions for Analytics
-            const { data: questionsData, error: questionsError } = await supabase
-                .from('questions')
-                .select('id, question_text, points')
-                .eq('exam_id', params.id)
-
-            if (!questionsError) {
-                setQuestions(questionsData || [])
-            }
-
-            // Fetch Answers for Analytics (only if we have attempts)
+            // Fetch Answers for Analytics
             if (attemptsData && attemptsData.length > 0) {
                 const attemptIds = attemptsData.map(a => a.id)
                 const { data: answersData, error: answersError } = await supabase
@@ -158,7 +156,7 @@ export default function ExamDetailsPage() {
             XLSX.writeFile(wb, fileName)
             toast.success(`${mode === 'detailed' ? 'Detailed' : 'Simple'} results exported!`)
         } catch (error) {
-            console.error('Export error:', error)
+            // console.error('Export error:', error)
             toast.error('Failed to export results')
         }
     }
@@ -183,7 +181,7 @@ export default function ExamDetailsPage() {
 
     if (loading) {
         return (
-            <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+            <div className="min-h-screen bg-white relative overflow-hidden flex items-center justify-center">
                 <div className="text-xl text-gray-600">Loading...</div>
             </div>
         )
@@ -191,7 +189,7 @@ export default function ExamDetailsPage() {
 
     if (!exam) {
         return (
-            <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+            <div className="min-h-screen bg-white relative overflow-hidden flex items-center justify-center">
                 <div className="text-xl text-gray-600">Exam not found</div>
             </div>
         )
@@ -218,7 +216,7 @@ export default function ExamDetailsPage() {
 
     return (
         <div className="min-h-screen bg-gray-50">
-            <header className="bg-white shadow-sm">
+            <header className="bg-white/80 backdrop-blur-xl shadow-sm border-b border-gray-200/60 sticky top-0 z-20">
                 <div className="max-w-7xl mx-auto px-4 py-4 sm:px-6 lg:px-8">
                     <div className="flex items-center justify-between">
                         <div className="flex items-center gap-4">
@@ -237,7 +235,7 @@ export default function ExamDetailsPage() {
                             <button
                                 onClick={() => exportToExcel('simple')}
                                 disabled={attempts.length === 0}
-                                className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                                className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-xl hover:bg-green-700 transition disabled:opacity-50 disabled:cursor-not-allowed shadow-md"
                             >
                                 <Download className="w-5 h-5" />
                                 Export
@@ -245,28 +243,28 @@ export default function ExamDetailsPage() {
                             <button
                                 onClick={() => exportToExcel('detailed')}
                                 disabled={attempts.length === 0}
-                                className="flex items-center gap-2 px-4 py-2 bg-green-800 text-white rounded-lg hover:bg-green-900 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                                className="flex items-center gap-2 px-4 py-2 bg-green-800 text-white rounded-xl hover:bg-green-900 transition disabled:opacity-50 disabled:cursor-not-allowed shadow-md"
                             >
                                 <Download className="w-5 h-5" />
                                 Detailed Excel
                             </button>
                             <Link
                                 href={`/admin/edit-exam/${exam.id}`}
-                                className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition"
+                                className="flex items-center gap-2 px-4 py-2 bg-gray-900 text-white rounded-xl hover:bg-gray-800 transition shadow-md"
                             >
                                 <Edit className="w-5 h-5" />
                                 Edit Exam
                             </Link>
                             <button
                                 onClick={copyLink}
-                                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+                                className="flex items-center gap-2 px-4 py-2 bg-gray-700 text-white rounded-xl hover:bg-gray-600 transition shadow-md"
                             >
                                 <Copy className="w-5 h-5" />
                                 Copy Link
                             </button>
                             <button
                                 onClick={toggleExamStatus}
-                                className={`px-4 py-2 rounded-lg transition font-semibold ${exam.is_active
+                                className={`px-4 py-2 rounded-xl transition font-semibold shadow-md ${exam.is_active
                                     ? 'bg-red-100 text-red-700 hover:bg-red-200'
                                     : 'bg-green-100 text-green-700 hover:bg-green-200'
                                     }`}
@@ -282,7 +280,7 @@ export default function ExamDetailsPage() {
                 {/* Stats */}
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
                     <StatCard
-                        icon={<Users className="w-8 h-8 text-blue-600" />}
+                        icon={<Users className="w-8 h-8 text-gray-900" />}
                         title="Total Attempts"
                         value={attempts.length}
                     />
@@ -304,7 +302,7 @@ export default function ExamDetailsPage() {
                 </div>
 
                 {/* Exam Info */}
-                <div className="bg-white rounded-xl shadow-md p-6 mb-8">
+                <div className="bg-white/80 backdrop-blur-xl rounded-2xl shadow-2xl shadow-black/10 border border-gray-200/60 p-6 mb-8">
                     <h2 className="text-xl font-semibold mb-4">Exam Information</h2>
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                         <InfoItem label="Duration" value={`${exam.duration_minutes} minutes`} />
@@ -322,13 +320,13 @@ export default function ExamDetailsPage() {
                 <div className="flex gap-4 mb-6 border-b border-gray-200">
                     <button
                         onClick={() => setActiveTab('attempts')}
-                        className={`pb-2 font-medium transition ${activeTab === 'attempts' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
+                        className={`pb-2 font-medium transition ${activeTab === 'attempts' ? 'text-gray-900 border-b-2 border-gray-900' : 'text-gray-500 hover:text-gray-700'}`}
                     >
                         Student Attempts
                     </button>
                     <button
                         onClick={() => setActiveTab('analytics')}
-                        className={`pb-2 font-medium transition ${activeTab === 'analytics' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
+                        className={`pb-2 font-medium transition ${activeTab === 'analytics' ? 'text-gray-900 border-b-2 border-gray-900' : 'text-gray-500 hover:text-gray-700'}`}
                     >
                         Detailed Analytics
                     </button>
@@ -337,7 +335,7 @@ export default function ExamDetailsPage() {
                 {activeTab === 'analytics' ? (
                     <div className="space-y-8 animate-in fade-in duration-300">
                         {/* Question Performance Analysis */}
-                        <div className="bg-white rounded-xl shadow-md p-6">
+                        <div className="bg-white/80 backdrop-blur-xl rounded-2xl shadow-2xl shadow-black/10 border border-gray-200/60 p-6">
                             <h2 className="text-xl font-semibold mb-6 flex items-center gap-2">
                                 <AlertTriangle className="w-5 h-5 text-orange-500" />
                                 Hardest Questions
@@ -371,8 +369,8 @@ export default function ExamDetailsPage() {
                         </div>
                     </div>
                 ) : (
-                    <div className="bg-white rounded-xl shadow-md overflow-hidden">
-                        <div className="px-6 py-4 border-b border-gray-200">
+                    <div className="bg-white/80 backdrop-blur-xl rounded-2xl shadow-2xl shadow-black/10 border border-gray-200/60 overflow-hidden">
+                        <div className="px-6 py-4 border-b border-gray-200 bg-gray-50">
                             <h2 className="text-xl font-semibold">Student Attempts</h2>
                         </div>
 
@@ -491,6 +489,22 @@ export default function ExamDetailsPage() {
                     </div>
                 )}
             </main>
+
+            <style jsx>{`
+                @keyframes blob {
+                    0%, 100% { transform: translateY(0px); }
+                    50% { transform: translateY(-20px); }
+                }
+                .animate-blob {
+                    animation: blob 7s infinite;
+                }
+                .animation-delay-2000 {
+                    animation-delay: 2s;
+                }
+                .animation-delay-4000 {
+                    animation-delay: 4s;
+                }
+            `}</style>
         </div>
     )
 }
@@ -501,13 +515,13 @@ function StatCard({ icon, title, value }: {
     value: string | number
 }) {
     return (
-        <div className="bg-white rounded-xl shadow-md p-6">
+        <div className="bg-white/80 backdrop-blur-xl rounded-2xl shadow-2xl shadow-black/10 border border-gray-200/60 p-6 hover:shadow-xl transition-all duration-300">
             <div className="flex items-center gap-4">
-                <div className="p-3 bg-gray-50 rounded-lg">
+                <div className="p-3 bg-gray-50 rounded-xl">
                     {icon}
                 </div>
                 <div>
-                    <p className="text-gray-600 text-sm">{title}</p>
+                    <p className="text-gray-600 text-sm font-medium">{title}</p>
                     <p className="text-2xl font-bold text-gray-900">{value}</p>
                 </div>
             </div>

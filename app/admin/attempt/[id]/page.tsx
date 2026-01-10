@@ -94,7 +94,7 @@ export default function AttemptDetailsPage() {
                 answers: answersData || []
             } as AttemptDetails)
         } catch (error) {
-            console.error('Error fetching attempt details:', error)
+            // console.error('Error fetching attempt details:', error)
             toast.error('Failed to load attempt details')
         } finally {
             setLoading(false)
@@ -103,7 +103,7 @@ export default function AttemptDetailsPage() {
 
     if (loading) {
         return (
-            <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 flex items-center justify-center">
+            <div className="min-h-screen bg-gray-50 flex items-center justify-center">
                 <div className="text-xl text-gray-600">Loading...</div>
             </div>
         )
@@ -111,7 +111,7 @@ export default function AttemptDetailsPage() {
 
     if (!attempt) {
         return (
-            <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 flex items-center justify-center">
+            <div className="min-h-screen bg-gray-50 flex items-center justify-center">
                 <div className="text-xl text-gray-600">Attempt not found</div>
             </div>
         )
@@ -122,18 +122,18 @@ export default function AttemptDetailsPage() {
     const totalQuestions = attempt.answers.length
 
     return (
-        <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50">
-            <header className="bg-white/80 backdrop-blur-md shadow-sm border-b border-gray-200/50 sticky top-0 z-10">
+        <div className="min-h-screen bg-gray-50">
+            <header className="bg-white border-b border-gray-200 sticky top-0 z-10">
                 <div className="max-w-7xl mx-auto px-4 py-4 sm:px-6 lg:px-8">
                     <div className="flex items-center gap-4">
                         <Link
                             href={`/admin/exam/${attempt.exam.id}`}
-                            className="p-2 hover:bg-gradient-to-r hover:from-blue-50 hover:to-indigo-50 rounded-lg transition-all duration-200"
+                            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
                         >
                             <ArrowLeft className="w-5 h-5 text-gray-700" />
                         </Link>
                         <div>
-                            <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
+                            <h1 className="text-2xl font-bold text-gray-900">
                                 Attempt Details
                             </h1>
                             <p className="text-sm text-gray-600">{attempt.exam.title}</p>
@@ -144,10 +144,10 @@ export default function AttemptDetailsPage() {
 
             <main className="max-w-5xl mx-auto px-4 py-8 sm:px-6 lg:px-8">
                 {/* Student Info Card */}
-                <div className="bg-white/90 backdrop-blur-sm rounded-2xl shadow-lg border border-gray-200/50 p-6 mb-6">
+                <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
                     <div className="flex items-center justify-between mb-6">
                         <div className="flex items-center gap-4">
-                            <div className="p-3 bg-gradient-to-br from-blue-500 to-indigo-500 rounded-xl">
+                            <div className="p-3 bg-gray-900 rounded-lg">
                                 <User className="w-6 h-6 text-white" />
                             </div>
                             <div>
@@ -158,9 +158,9 @@ export default function AttemptDetailsPage() {
                             </div>
                         </div>
                         {attempt.completed && (
-                            <div className={`px-4 py-2 rounded-xl font-semibold ${passed
-                                    ? 'bg-green-100 text-green-700 border border-green-200'
-                                    : 'bg-red-100 text-red-700 border border-red-200'
+                            <div className={`px-4 py-2 rounded-lg font-semibold ${passed
+                                ? 'bg-green-100 text-green-700 border border-green-200'
+                                : 'bg-red-100 text-red-700 border border-red-200'
                                 }`}>
                                 {passed ? 'PASSED' : 'FAILED'}
                             </div>
@@ -169,28 +169,24 @@ export default function AttemptDetailsPage() {
 
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                         <StatBox
-                            icon={<Trophy className="w-5 h-5 text-yellow-600" />}
+                            icon={<Trophy className="w-5 h-5 text-gray-900" />}
                             label="Score"
                             value={attempt.score !== null ? `${attempt.score.toFixed(1)}%` : 'N/A'}
-                            gradient="from-yellow-50 to-orange-50"
                         />
                         <StatBox
                             icon={<CheckCircle2 className="w-5 h-5 text-green-600" />}
                             label="Correct"
                             value={`${correctAnswers}/${totalQuestions}`}
-                            gradient="from-green-50 to-emerald-50"
                         />
                         <StatBox
-                            icon={<Clock className="w-5 h-5 text-blue-600" />}
+                            icon={<Clock className="w-5 h-5 text-gray-600" />}
                             label="Time Spent"
                             value={attempt.time_spent_seconds ? `${Math.floor(attempt.time_spent_seconds / 60)} min` : 'N/A'}
-                            gradient="from-blue-50 to-cyan-50"
                         />
                         <StatBox
                             icon={<AlertTriangle className="w-5 h-5 text-red-600" />}
                             label="Exits"
                             value={attempt.exit_count}
-                            gradient="from-red-50 to-pink-50"
                         />
                     </div>
                 </div>
@@ -206,7 +202,7 @@ export default function AttemptDetailsPage() {
                         return (
                             <div
                                 key={answer.question_id}
-                                className="bg-white/90 backdrop-blur-sm rounded-2xl shadow-lg border border-gray-200/50 p-6 hover:shadow-xl transition-shadow duration-300"
+                                className="bg-white rounded-xl border border-gray-200 p-6"
                             >
                                 <div className="flex items-start justify-between mb-4">
                                     <div className="flex-1">
@@ -223,8 +219,8 @@ export default function AttemptDetailsPage() {
                                         </h3>
                                     </div>
                                     <div className={`p-2 rounded-lg ${answer.is_correct
-                                            ? 'bg-green-100'
-                                            : 'bg-red-100'
+                                        ? 'bg-green-100'
+                                        : 'bg-red-100'
                                         }`}>
                                         {answer.is_correct ? (
                                             <CheckCircle2 className="w-6 h-6 text-green-600" />
@@ -282,14 +278,13 @@ export default function AttemptDetailsPage() {
     )
 }
 
-function StatBox({ icon, label, value, gradient }: {
+function StatBox({ icon, label, value }: {
     icon: React.ReactNode
     label: string
     value: string | number
-    gradient: string
 }) {
     return (
-        <div className={`p-4 rounded-xl bg-gradient-to-br ${gradient} border border-gray-200/50`}>
+        <div className="p-4 rounded-lg bg-gray-50 border border-gray-200">
             <div className="flex items-center gap-2 mb-1">
                 {icon}
                 <span className="text-sm font-medium text-gray-700">{label}</span>

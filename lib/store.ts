@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { Admin } from './supabase'
+import { encryptExamState, decryptExamState } from './secureStorage'
 
 interface AuthState {
   admin: Admin | null
@@ -56,7 +57,14 @@ interface ExamState {
   reset: () => void
 }
 
-const getStoredExamState = () => {
+interface ExamStateStorage {
+  attemptId: string | null
+  answers: Record<string, string>
+  startTime: number | null
+  exitCount: number
+}
+
+const getStoredExamState = (): ExamStateStorage => {
   if (typeof window === 'undefined') return {
     attemptId: null,
     answers: {},
@@ -64,8 +72,19 @@ const getStoredExamState = () => {
     exitCount: 0,
   }
   try {
-    const stored = localStorage.getItem('exam-state')
-    return stored ? JSON.parse(stored) : {
+    const encrypted = localStorage.getItem('exam-state')
+    if (!encrypted) {
+      return {
+        attemptId: null,
+        answers: {},
+        startTime: null,
+        exitCount: 0,
+      }
+    }
+
+    // SECURITY FIX: Decrypt the state
+    const decrypted = decryptExamState(encrypted)
+    return decrypted || {
       attemptId: null,
       answers: {},
       startTime: null,
@@ -81,12 +100,16 @@ const getStoredExamState = () => {
   }
 }
 
-const setStoredExamState = (state: any) => {
+const setStoredExamState = (state: ExamStateStorage) => {
   if (typeof window === 'undefined') return
   try {
-    localStorage.setItem('exam-state', JSON.stringify(state))
-  } catch {
-    // Ignore storage errors
+    // SECURITY FIX: Encrypt before storing
+    const encrypted = encryptExamState(state)
+    if (encrypted) {
+      localStorage.setItem('exam-state', encrypted)
+    }
+  } catch (error) {
+    // console.error('Failed to store exam state:', error)
   }
 }
 

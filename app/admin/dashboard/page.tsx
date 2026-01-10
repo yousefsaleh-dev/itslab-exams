@@ -73,19 +73,17 @@ export default function AdminDashboard() {
     const cloneExam = async (examId: string) => {
         if (!confirm('Do you want to clone this exam?')) return
         try {
-            // 1. Fetch full exam data
-            const { data: examData, error: examError } = await supabase
-                .from('exams')
-                .select('*')
-                .eq('id', examId)
-                .single()
-            if (examError) throw examError
+            // 1. Fetch exam and questions in parallel (faster)
+            const [examResult, questionsResult] = await Promise.all([
+                supabase.from('exams').select('*').eq('id', examId).single(),
+                supabase.from('questions').select('*, options(*)').eq('exam_id', examId)
+            ])
 
-            const { data: questionsData, error: questionsError } = await supabase
-                .from('questions')
-                .select('*, options(*)')
-                .eq('exam_id', examId)
-            if (questionsError) throw questionsError
+            if (examResult.error) throw examResult.error
+            if (questionsResult.error) throw questionsResult.error
+
+            const examData = examResult.data
+            const questionsData = questionsResult.data
 
             // 2. Create new exam (exclude system fields)
             const { id, created_at, ...examDataToClone } = examData
@@ -101,37 +99,42 @@ export default function AdminDashboard() {
                 .single()
             if (newExamError) throw newExamError
 
-            // 3. Duplicate questions and options
-            // We need to map old questions to new questions to handle options
-            for (const q of questionsData || []) {
-                const { data: newQuestion, error: newQError } = await supabase
-                    .from('questions')
-                    .insert([{
-                        exam_id: newExam.id,
-                        question_text: q.question_text,
-                        question_order: q.question_order,
-                        points: q.points
-                    }])
-                    .select()
-                    .single()
-                if (newQError) throw newQError
+            // 3. Batch insert all questions at once
+            const questionsToInsert = questionsData.map((q, idx) => ({
+                exam_id: newExam.id,
+                question_text: q.question_text,
+                question_order: q.question_order,
+                points: q.points
+            }))
 
-                if (q.options && q.options.length > 0) {
-                    const newOptions = q.options.map((o: any) => ({
-                        question_id: newQuestion.id,
-                        option_text: o.option_text,
-                        is_correct: o.is_correct,
-                        option_order: o.option_order
-                    }))
-                    const { error: newOptError } = await supabase.from('options').insert(newOptions)
-                    if (newOptError) throw newOptError
-                }
-            }
+            const { data: newQuestions, error: questionsInsertError } = await supabase
+                .from('questions')
+                .insert(questionsToInsert)
+                .select()
 
-            toast.success('Exam cloned successfully')
+            if (questionsInsertError) throw questionsInsertError
+
+            // 4. Batch insert all options at once
+            const allOptions = newQuestions.flatMap((newQ, idx) => {
+                const originalQuestion = questionsData[idx]
+                return originalQuestion.options.map((o: any) => ({
+                    question_id: newQ.id,
+                    option_text: o.option_text,
+                    is_correct: o.is_correct,
+                    option_order: o.option_order
+                }))
+            })
+
+            const { error: optionsInsertError } = await supabase
+                .from('options')
+                .insert(allOptions)
+
+            if (optionsInsertError) throw optionsInsertError
+
+            toast.success(`Exam cloned successfully! (${newQuestions.length} questions)`)
             fetchExams()
         } catch (error) {
-            console.error(error)
+            // console.error(error)
             toast.error('Failed to clone exam')
         }
     }
@@ -142,25 +145,25 @@ export default function AdminDashboard() {
 
     if (loading) {
         return (
-            <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 flex items-center justify-center">
+            <div className="min-h-screen bg-white relative overflow-hidden flex items-center justify-center">
                 <div className="text-xl text-gray-600">Loading...</div>
             </div>
         )
     }
 
     return (
-        <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50">
+        <div className="min-h-screen bg-gray-50">
             {/* Header */}
-            <header className="bg-white/80 backdrop-blur-md shadow-sm border-b border-gray-200/50 sticky top-0 z-10">
+            <header className="bg-white/80 backdrop-blur-xl shadow-sm border-b border-gray-200/60 sticky top-0 z-20">
                 <div className="max-w-7xl mx-auto px-4 py-4 sm:px-6 lg:px-8">
                     <div className="flex justify-between items-center">
                         <div>
-                            <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">Admin Dashboard</h1>
+                            <h1 className="text-2xl font-bold text-gray-900">Admin Dashboard</h1>
                             <p className="text-gray-600">Welcome back, <span className="font-semibold">{admin?.name}</span></p>
                         </div>
                         <button
                             onClick={handleLogout}
-                            className="flex items-center gap-2 px-4 py-2 text-gray-700 hover:bg-gradient-to-r hover:from-red-50 hover:to-pink-50 rounded-xl transition-all duration-200 border border-transparent hover:border-red-200"
+                            className="flex items-center gap-2 px-4 py-2 text-gray-700 hover:bg-red-50 rounded-xl transition-all duration-200 border border-transparent hover:border-red-200"
                         >
                             <LogOut className="w-5 h-5" />
                             Logout
@@ -176,19 +179,19 @@ export default function AdminDashboard() {
                         icon={<FileText className="w-8 h-8 text-white" />}
                         title="Total Exams"
                         value={exams.length}
-                        gradient="from-blue-500 to-cyan-500"
+                        gradient="from-gray-700 to-gray-900"
                     />
                     <StatCard
                         icon={<CheckCircle2 className="w-8 h-8 text-white" />}
                         title="Active Exams"
                         value={exams.filter(e => e.is_active).length}
-                        gradient="from-green-500 to-emerald-500"
+                        gradient="from-green-600 to-green-700"
                     />
                     <StatCard
                         icon={<XCircle className="w-8 h-8 text-white" />}
                         title="Inactive"
                         value={exams.filter(e => !e.is_active).length}
-                        gradient="from-purple-500 to-pink-500"
+                        gradient="from-gray-500 to-gray-600"
                     />
                 </div>
 
@@ -201,12 +204,12 @@ export default function AdminDashboard() {
                             placeholder="Search exams..."
                             value={searchQuery}
                             onChange={(e) => setSearchQuery(e.target.value)}
-                            className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                            className="w-full pl-10 pr-4 py-3 bg-white border border-gray-300 rounded-xl text-[15px] focus:ring-2 focus:ring-gray-900 focus:border-transparent transition-all duration-200 hover:border-gray-400"
                         />
                     </div>
                     <Link
                         href="/admin/create-exam"
-                        className="w-full md:w-auto inline-flex items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-xl hover:from-blue-700 hover:to-indigo-700 transition-all duration-200 font-semibold shadow-lg hover:shadow-xl"
+                        className="w-full md:w-auto inline-flex items-center justify-center gap-2 px-6 py-3 bg-gray-900 text-white rounded-xl hover:bg-gray-800 active:scale-[0.99] transition-all duration-200 font-semibold shadow-lg shadow-gray-900/10 hover:shadow-xl hover:shadow-gray-900/20"
                     >
                         <Plus className="w-5 h-5" />
                         Create New Exam
@@ -214,8 +217,8 @@ export default function AdminDashboard() {
                 </div>
 
                 {/* Exams List */}
-                <div className="bg-white/90 backdrop-blur-sm rounded-2xl shadow-lg border border-gray-200/50 overflow-hidden">
-                    <div className="px-6 py-4 border-b border-gray-200 bg-gradient-to-r from-gray-50 to-blue-50/30">
+                <div className="bg-white/80 backdrop-blur-xl rounded-2xl shadow-2xl shadow-black/10 border border-gray-200/60 overflow-hidden">
+                    <div className="px-6 py-4 border-b border-gray-200 bg-gray-50">
                         <h2 className="text-xl font-semibold text-gray-900">Your Exams</h2>
                     </div>
 
@@ -235,7 +238,7 @@ export default function AdminDashboard() {
                             {filteredExams.map((exam) => (
                                 <div
                                     key={exam.id}
-                                    className="px-6 py-4 hover:bg-gradient-to-r hover:from-blue-50/50 hover:to-indigo-50/50 transition-all duration-200"
+                                    className="px-6 py-4 hover:bg-gray-50 transition-all duration-200"
                                 >
                                     <div className="flex items-center justify-between">
                                         <div className="flex-1">
@@ -305,6 +308,22 @@ export default function AdminDashboard() {
                     )}
                 </div>
             </main>
+
+            <style jsx>{`
+                @keyframes blob {
+                    0%, 100% { transform: translateY(0px); }
+                    50% { transform: translateY(-20px); }
+                }
+                .animate-blob {
+                    animation: blob 7s infinite;
+                }
+                .animation-delay-2000 {
+                    animation-delay: 2s;
+                }
+                .animation-delay-4000 {
+                    animation-delay: 4s;
+                }
+            `}</style>
         </div>
     )
 }

@@ -13,7 +13,7 @@ export async function POST(request: NextRequest) {
 
         const apiKey = process.env.HUGGINGFACE_API_KEY
         if (!apiKey) {
-            console.error('HUGGINGFACE_API_KEY not found in environment variables')
+            // console.error('HUGGINGFACE_API_KEY not found in environment variables')
             return NextResponse.json(
                 { error: 'AI service not configured. Please add HUGGINGFACE_API_KEY to .env.local' },
                 { status: 500 }
@@ -60,7 +60,7 @@ Ensure:
 
         if (!response.ok) {
             const errorText = await response.text()
-            console.error('Hugging Face API Error:', errorText)
+            // console.error('Hugging Face API Error:', errorText)
 
             // Check if model is loading
             if (errorText.includes('loading') || errorText.includes('currently loading')) {
@@ -79,7 +79,7 @@ Ensure:
         const data = await response.json()
 
         if (!data.choices || !Array.isArray(data.choices) || data.choices.length === 0) {
-            console.error('Invalid response format:', data)
+            // console.error('Invalid response format:', data)
             return NextResponse.json(
                 { error: 'Invalid AI response' },
                 { status: 500 }
@@ -98,7 +98,7 @@ Ensure:
         const lastBracket = content.lastIndexOf(']')
 
         if (firstBracket === -1 || lastBracket === -1 || firstBracket >= lastBracket) {
-            console.error('No JSON array found. Response:', content)
+            // console.error('No JSON array found. Response:', content)
             return NextResponse.json(
                 { error: 'Failed to parse AI response. Please try again.' },
                 { status: 500 }
@@ -111,7 +111,7 @@ Ensure:
         try {
             questions = JSON.parse(content)
         } catch (parseError) {
-            console.error('JSON parse error:', parseError)
+            // console.error('JSON parse error:', parseError)
             return NextResponse.json(
                 { error: 'Failed to parse questions. Please try again.' },
                 { status: 500 }
@@ -151,7 +151,7 @@ Ensure:
 
         return NextResponse.json({ questions: validQuestions })
     } catch (error: any) {
-        console.error('AI Generation Error:', error)
+        // console.error('AI Generation Error:', error)
         return NextResponse.json(
             { error: error.message || 'Failed to generate questions' },
             { status: 500 }

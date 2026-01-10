@@ -21,6 +21,10 @@ export default function StudentExamPage() {
     const [timeLeft, setTimeLeft] = useState(0)
     const [exitWarningActive, setExitWarningActive] = useState(false)
     const [warningCountdown, setWarningCountdown] = useState(10)
+
+    // FIX #3 & #5: useRef for current values to avoid stale closures
+    const timeLeftRef = useRef(timeLeft)
+    const warningCountdownRef = useRef(10)
     const [score, setScore] = useState<number | null>(null)
     const [totalPoints, setTotalPoints] = useState(0)
     const [isOnline, setIsOnline] = useState(true)
@@ -72,32 +76,22 @@ export default function StudentExamPage() {
     // ====== FETCH EXAM DATA ======
     const fetchExam = async () => {
         try {
-            const { data: examData, error: examError } = await supabase
-                .from('exams')
-                .select('*')
-                .eq('id', params.id)
-                .single()
+            // SECURITY FIX: Use API route that excludes is_correct field
+            const response = await fetch(`/api/exam/${params.id}/questions`)
 
-            if (examError || !examData) {
-                setExamError('Exam not found. Please check the link and try again.')
+            if (!response.ok) {
+                const error = await response.json()
+                if (response.status === 403) {
+                    setIsExamInactive(true)
+                    return
+                }
+                setExamError(error.error || 'Failed to load exam')
                 return
             }
 
-            if (!examData.is_active) {
-                setIsExamInactive(true)
-                // setExamError('This exam is currently deactivated by the instructor.')
-                return
-            }
+            const { exam: examData, questions: questionsData } = await response.json()
 
             setExam(examData)
-
-            const { data: questionsData, error: questionsError } = await supabase
-                .from('questions')
-                .select(`*, options (*)`)
-                .eq('exam_id', params.id)
-                .order('question_order')
-
-            if (questionsError) throw questionsError
 
             let processedQuestions = questionsData as ExamQuestion[]
 
@@ -121,49 +115,38 @@ export default function StudentExamPage() {
             setTotalPoints(processedQuestions.reduce((sum, q) => sum + q.points, 0))
 
         } catch (error) {
-            console.error('Error fetching exam:', error)
-            setExamError('Failed to load exam. Please refresh the page and try again.')
+            // console.error('Error fetching exam:', error)
+            setExamError('Failed to load exam.')
         }
     }
 
     // ====== AUTO SUBMIT EXPIRED ATTEMPT ======
     const autoSubmitExpiredAttempt = async (attemptId: string, examData: Exam, questions: ExamQuestion[]) => {
         try {
-            const { data: savedAnswers } = await supabase
-                .from('student_answers')
-                .select('*')
-                .eq('attempt_id', attemptId)
+            // FIX #1 (CRITICAL): Use secure server API instead of client calculation
+            const currentAnswers = useExamStore.getState().answers || {}
 
-            let earnedPoints = 0
-            const totalPts = questions.reduce((sum, q) => sum + q.points, 0)
-
-            if (savedAnswers) {
-                savedAnswers.forEach(ans => {
-                    const question = questions.find(q => q.id === ans.question_id)
-                    if (question && ans.is_correct) {
-                        earnedPoints += question.points
-                    }
+            const response = await fetch(`/api/exam/${examData.id}/submit`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    attemptId,
+                    answers: currentAnswers
                 })
+            })
+
+            if (!response.ok) {
+                throw new Error('Failed to submit exam')
             }
 
-            const finalScore = totalPts > 0 ? (earnedPoints / totalPts) * 100 : 0
-
-            await supabase
-                .from('student_attempts')
-                .update({
-                    completed: true,
-                    score: finalScore,
-                    total_points: totalPts,
-                    time_spent_seconds: examData.duration_minutes * 60,
-                    completed_at: new Date().toISOString()
-                })
-                .eq('id', attemptId)
+            const { score: finalScore, timeSpent: finalTimeSpent } = await response.json()
 
             setScore(finalScore)
-            setTimeSpent(examData.duration_minutes * 60)
+            setTimeSpent(finalTimeSpent)
             setPhase('result')
         } catch (error) {
-            console.error('Error auto-submitting:', error)
+            // console.error('Error auto-submitting:', error)
+            toast.error('Failed to auto-submit exam. Please contact support.')
         }
     }
 
@@ -212,51 +195,57 @@ export default function StudentExamPage() {
                 .maybeSingle()
 
             if (incompleteAttempt) {
-                // Calculate remaining time
-                let remaining: number
-                const lastActivity = incompleteAttempt.last_activity || incompleteAttempt.created_at
-                const timeSinceLastActivity = Math.floor((Date.now() - new Date(lastActivity).getTime()) / 1000)
-
-                if (incompleteAttempt.time_remaining_seconds != null) {
-                    // SAFETY CHECK FIRST
-                    if (timeSinceLastActivity > exam.duration_minutes * 60) {
-                        remaining = incompleteAttempt.time_remaining_seconds
-                    } else {
-                        // Subtract time that passed since last activity
-                        remaining = Math.max(0, incompleteAttempt.time_remaining_seconds - timeSinceLastActivity)
-                    }
+                // FIX #6 (MEDIUM): Validate name matches
+                if (incompleteAttempt.student_name !== examStudentName.trim()) {
+                    toast.error('Name does not match previous attempt. Starting new exam.')
+                    // Fall through to create new attempt
                 } else {
-                    const elapsedTime = Math.floor((Date.now() - new Date(incompleteAttempt.created_at).getTime()) / 1000)
-                    remaining = Math.max(0, (exam.duration_minutes * 60) - elapsedTime)
-                }
+                    // Calculate remaining time
+                    let remaining: number
+                    const lastActivity = incompleteAttempt.last_activity || incompleteAttempt.created_at
+                    const timeSinceLastActivity = Math.floor((Date.now() - new Date(lastActivity).getTime()) / 1000)
 
-                if (remaining <= 0) {
-                    toast.error('Your previous exam time has expired')
-                    await autoSubmitExpiredAttempt(incompleteAttempt.id, exam, questions)
+                    if (incompleteAttempt.time_remaining_seconds != null) {
+                        // SAFETY CHECK FIRST
+                        if (timeSinceLastActivity > exam.duration_minutes * 60) {
+                            remaining = incompleteAttempt.time_remaining_seconds
+                        } else {
+                            // Subtract time that passed since last activity
+                            remaining = Math.max(0, incompleteAttempt.time_remaining_seconds - timeSinceLastActivity)
+                        }
+                    } else {
+                        const elapsedTime = Math.floor((Date.now() - new Date(incompleteAttempt.created_at).getTime()) / 1000)
+                        remaining = Math.max(0, (exam.duration_minutes * 60) - elapsedTime)
+                    }
+
+                    if (remaining <= 0) {
+                        toast.error('Your previous exam time has expired')
+                        await autoSubmitExpiredAttempt(incompleteAttempt.id, exam, questions)
+                        return
+                    }
+
+                    // Check inactivity (15 minutes)
+                    if (timeSinceLastActivity > 900) {
+                        toast.error('Previous session expired due to inactivity')
+                        await autoSubmitExpiredAttempt(incompleteAttempt.id, exam, questions)
+                        return
+                    }
+
+                    // Show resume screen
+                    localStorage.setItem(`exam_${params.id}_student_name`, examStudentName.trim())
+                    setStudentName(examStudentName)
+
+                    // Pass the correctly calculated remaining time to resume screen
+                    const correctRemainingTime = Math.max(1, remaining)
+                    setResumeAttempt({
+                        ...incompleteAttempt,
+                        remainingTime: correctRemainingTime,
+                        calculatedAt: Date.now()
+                    })
+
+                    setPhase('resume')
                     return
                 }
-
-                // Check inactivity (15 minutes)
-                if (timeSinceLastActivity > 900) {
-                    toast.error('Previous session expired due to inactivity')
-                    await autoSubmitExpiredAttempt(incompleteAttempt.id, exam, questions)
-                    return
-                }
-
-                // Show resume screen
-                localStorage.setItem(`exam_${params.id}_student_name`, examStudentName.trim())
-                setStudentName(examStudentName)
-
-                // Pass the correctly calculated remaining time to resume screen
-                const correctRemainingTime = Math.max(1, remaining)
-                setResumeAttempt({
-                    ...incompleteAttempt,
-                    remainingTime: correctRemainingTime,
-                    calculatedAt: Date.now()
-                })
-
-                setPhase('resume')
-                return
             }
 
             // Create new attempt
@@ -284,7 +273,7 @@ export default function StudentExamPage() {
             enterFullScreen()
 
         } catch (error: any) {
-            console.error('Start exam error:', error)
+            // console.error('Start exam error:', error)
             toast.error(`Failed to start exam: ${error.message}`)
         }
     }
@@ -294,9 +283,9 @@ export default function StudentExamPage() {
         if (!resumeAttempt || !exam) return
 
         try {
-            // Calculate time that passed since remainingTime was calculated
-            const timeSinceCalculation = Math.floor((Date.now() - resumeAttempt.calculatedAt) / 1000)
-            const remainingTime = Math.max(0, resumeAttempt.remainingTime - timeSinceCalculation)
+            // FIX #2 (HIGH): Don't recalculate time - already calculated in startExam
+            // Using the time directly without re-subtracting
+            const remainingTime = Math.max(0, resumeAttempt.remainingTime)
 
             // Check if time has expired
             if (remainingTime <= 0) {
@@ -338,7 +327,7 @@ export default function StudentExamPage() {
             toast.success(`Exam resumed! Time remaining: ${formatTime(finalRemainingTime)}`)
 
         } catch (error) {
-            console.error('Error resuming:', error)
+            // console.error('Error resuming:', error)
             toast.error('Failed to resume exam')
         }
     }
@@ -353,44 +342,24 @@ export default function StudentExamPage() {
         try {
             if (!attemptId || !exam) throw new Error('Missing data')
 
-            let earnedPoints = 0
-            const answersToUpsert = []
-
-            for (const question of questions) {
-                const selectedOptionId = answers[question.id]
-                if (!selectedOptionId) continue
-
-                const selectedOption = question.options.find(o => o.id === selectedOptionId)
-                if (selectedOption?.is_correct) {
-                    earnedPoints += question.points
-                }
-
-                answersToUpsert.push({
-                    attempt_id: attemptId,
-                    question_id: question.id,
-                    selected_option_id: selectedOptionId,
-                    is_correct: selectedOption?.is_correct || false
+            // SECURITY FIX: Call server API for validation and scoring
+            const response = await fetch(`/api/exam/${exam.id}/submit`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    attemptId,
+                    answers  // Just send selections, server determines correctness
                 })
+            })
+
+            if (!response.ok) {
+                const error = await response.json()
+                throw new Error(error.error || 'Submission failed')
             }
 
-            if (answersToUpsert.length > 0) {
-                await supabase.from('student_answers').delete().eq('attempt_id', attemptId)
-                await supabase.from('student_answers').insert(answersToUpsert)
-            }
-
-            const finalScore = totalPoints > 0 ? (earnedPoints / totalPoints) * 100 : 0
-            const finalTimeSpent = (exam.duration_minutes * 60) - timeLeft
-
-            await supabase
-                .from('student_attempts')
-                .update({
-                    completed: true,
-                    score: finalScore,
-                    total_points: totalPoints,
-                    time_spent_seconds: finalTimeSpent,
-                    completed_at: new Date().toISOString()
-                })
-                .eq('id', attemptId)
+            const { score: finalScore, timeSpent: finalTimeSpent } = await response.json()
 
             setScore(finalScore)
             setTimeSpent(finalTimeSpent)
@@ -403,15 +372,15 @@ export default function StudentExamPage() {
             reset()
             toast.success('Exam submitted successfully!')
 
-        } catch (error) {
-            console.error('Submit error:', error)
-            toast.error('Failed to submit exam. Please try again.')
+        } catch (error: any) {
+            // console.error('Submit error:', error)
+            toast.error(error.message || 'Failed to submit exam. Please try again.')
         } finally {
             setSyncing(false)
             setIsSubmitting(false)
             setShowSubmitModal(false)
         }
-    }, [isSubmitting, attemptId, exam, questions, answers, totalPoints, timeLeft, reset])
+    }, [isSubmitting, attemptId, exam, answers, reset])
 
     submitExamRef.current = submitExamConfirmed
 
@@ -432,20 +401,21 @@ export default function StudentExamPage() {
         const currentQuestion = questions[currentQuestionIndex]
         setAnswer(currentQuestion.id, optionId)
 
+        // SECURITY FIX: Just save selection locally, no is_correct field
+        // Server will validate on submission
         if (isOnline) {
             try {
-                const selectedOption = currentQuestion.options.find(o => o.id === optionId)
                 await supabase
                     .from('student_answers')
                     .upsert({
                         attempt_id: attemptId,
                         question_id: currentQuestion.id,
-                        selected_option_id: optionId,
-                        is_correct: selectedOption?.is_correct || false
+                        selected_option_id: optionId
+                        // ✅ NO is_correct field - server calculates this
                     }, { onConflict: 'attempt_id,question_id' })
             } catch (error) {
-                console.error('Failed to save answer:', error)
-                toast.error('Failed to save answer. Will retry...')
+                // console.error('Failed to save answer:', error)
+                toast.error('Failed to save answer. Will retry on submit.')
             }
         }
     }
@@ -612,7 +582,7 @@ export default function StudentExamPage() {
                 setPhase('resume')
 
             } catch (error) {
-                console.error('Error checking attempt:', error)
+                // console.error('Error checking attempt:', error)
             }
         }
 
@@ -626,7 +596,9 @@ export default function StudentExamPage() {
         if (savedFlags) {
             try {
                 setFlaggedQuestions(JSON.parse(savedFlags))
-            } catch (e) { console.error('Error parsing flags', e) }
+            } catch (e) { 
+                // console.error('Error parsing flags', e)
+            }
         }
     }, [attemptId])
 
@@ -648,6 +620,9 @@ export default function StudentExamPage() {
 
         // Don't start if timeLeft is 0
         if (timeLeft <= 0) return
+
+        // FIX #3: Keep ref in sync with current timer value
+        timeLeftRef.current = timeLeft
 
         // Clear any existing interval
         if (timerIntervalRef.current) {
@@ -694,21 +669,21 @@ export default function StudentExamPage() {
             // Only sync every 10 seconds minimum
             if (now - lastSyncTimeRef.current >= 10000) {
                 lastSyncTimeRef.current = now
+                // FIX #3 (MEDIUM): Use ref to get current timeLeft value
+                const currentTime = timeLeftRef.current
                 supabase.from('student_attempts').update({
                     last_activity: new Date().toISOString(),
-                    time_remaining_seconds: timeLeft
+                    time_remaining_seconds: currentTime
                 }).eq('id', attemptId).then(({ error }) => {
                     if (error) {
-                        console.error('Failed to sync activity:', error)
-                    } else {
-                        // console.log('Activity synced, time remaining:', timeLeft)
+                        // console.error('Failed to sync activity:', error)
                     }
                 })
             }
         }, 10000)
 
         return () => clearInterval(interval)
-    }, [phase, attemptId, timeLeft])
+    }, [phase, attemptId])
 
     // Fullscreen listener
     useEffect(() => {
@@ -833,20 +808,17 @@ export default function StudentExamPage() {
     if (isExamInactive) {
         return (
             <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
-                <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl p-8 text-center">
-                    <div className="w-24 h-24 bg-yellow-100 rounded-full mx-auto mb-6 flex items-center justify-center">
-                        <Clock className="w-12 h-12 text-yellow-600" />
+                <div className="bg-white rounded-xl border border-gray-200 w-full max-w-md p-8 text-center">
+                    <div className="w-16 h-16 bg-yellow-50 rounded-full mx-auto mb-4 flex items-center justify-center">
+                        <Clock className="w-8 h-8 text-yellow-600" />
                     </div>
-                    <h1 className="text-3xl font-bold text-gray-900 mb-2">Exam Not Active</h1>
-                    <p className="text-gray-600 mb-8 max-w-md mx-auto">
-                        This exam is currently not active. It may have been closed by the instructor or hasn't started yet.
+                    <h1 className="text-2xl font-bold text-gray-900 mb-2">Exam Not Active</h1>
+                    <p className="text-gray-600 text-sm mb-6">
+                        This exam is currently not active. Please check with your instructor.
                     </p>
-                    <div className="bg-yellow-50 rounded-xl p-4 mb-8 text-sm text-yellow-800">
-                        Please check with your instructor for the correct exam time.
-                    </div>
                     <button
                         onClick={() => window.location.reload()}
-                        className="px-8 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-semibold"
+                        className="w-full px-6 py-2.5 bg-gray-900 text-white rounded-lg hover:bg-gray-800 transition font-medium"
                     >
                         Check Again
                     </button>
@@ -860,8 +832,8 @@ export default function StudentExamPage() {
         return (
             <div className="min-h-screen bg-gray-50 flex items-center justify-center">
                 <div className="text-center">
-                    <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-                    <div className="text-xl text-gray-600">Loading exam...</div>
+                    <div className="w-12 h-12 border-4 border-gray-900 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+                    <div className="text-sm text-gray-600">Loading exam...</div>
                 </div>
             </div>
         )
@@ -871,15 +843,15 @@ export default function StudentExamPage() {
     if (examError) {
         return (
             <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
-                <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl p-8 text-center">
-                    <div className="w-24 h-24 bg-red-100 rounded-full mx-auto mb-6 flex items-center justify-center">
-                        <XCircle className="w-12 h-12 text-red-600" />
+                <div className="bg-white rounded-xl border border-gray-200 w-full max-w-md p-8 text-center">
+                    <div className="w-16 h-16 bg-red-50 rounded-full mx-auto mb-4 flex items-center justify-center">
+                        <XCircle className="w-8 h-8 text-red-600" />
                     </div>
-                    <h1 className="text-3xl font-bold text-gray-900 mb-2">Unable to Load Exam</h1>
-                    <p className="text-gray-600 mb-8">{examError}</p>
+                    <h1 className="text-2xl font-bold text-gray-900 mb-2">Unable to Load Exam</h1>
+                    <p className="text-gray-600 text-sm mb-6">{examError}</p>
                     <button
                         onClick={() => window.location.reload()}
-                        className="px-8 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-semibold"
+                        className="w-full px-6 py-2.5 bg-gray-900 text-white rounded-lg hover:bg-gray-800 transition font-medium"
                     >
                         Try Again
                     </button>
@@ -891,68 +863,59 @@ export default function StudentExamPage() {
     // Resume
     if (phase === 'resume' && resumeAttempt && exam) {
         const examData = exam!
-        const minsRemaining = Math.floor(resumeAttempt.remainingTime / 60)
-
+        //const minsRemaining = Math.floor(resumeAttempt.remainingTime / 60)
         return (
-            <div className="min-h-screen bg-gradient-to-br from-green-50 to-blue-100 flex items-center justify-center p-4">
-                <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl p-8">
+            <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+                <div className="bg-white rounded-xl border border-gray-200 w-full max-w-lg p-8">
                     <div className="text-center mb-6">
-                        <div className="w-24 h-24 bg-green-100 rounded-full mx-auto mb-4 flex items-center justify-center">
-                            <PlayCircle className="w-12 h-12 text-green-600" />
+                        <div className="w-16 h-16 bg-green-50 rounded-full mx-auto mb-3 flex items-center justify-center">
+                            <PlayCircle className="w-8 h-8 text-green-600" />
                         </div>
-                        <h1 className="text-3xl font-bold text-gray-900 mb-2">Welcome Back!</h1>
-                        <p className="text-gray-600">You have an exam in progress</p>
+                        <h1 className="text-2xl font-bold text-gray-900 mb-1">Welcome Back!</h1>
+                        <p className="text-gray-600 text-sm">Continue your exam</p>
                     </div>
 
-                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-6 mb-6">
-                        <h2 className="font-semibold text-blue-900 mb-4">Exam Progress</h2>
-                        <div className="grid grid-cols-2 gap-4 text-sm">
-                            <div>
-                                <div className="text-blue-700 font-medium">Exam Name</div>
-                                <div className="text-blue-900">{examData.title}</div>
-                            </div>
-                            <div>
-                                <div className="text-blue-700 font-medium">Student Name</div>
-                                <div className="text-blue-900">{studentName}</div>
-                            </div>
-                            <div>
-                                <div className="text-blue-700 font-medium">Time Remaining</div>
-                                <div className="text-blue-900 text-xl font-bold">{formatTime(resumeAttempt.remainingTime)}</div>
-                            </div>
-                            <div>
-                                <div className="text-blue-700 font-medium">Questions Answered</div>
-                                <div className="text-blue-900">{Object.keys(answers).length} / {questions.length}</div>
-                            </div>
+                    <div className="bg-gray-50 rounded-lg p-4 mb-4 space-y-3">
+                        <div className="flex justify-between text-sm">
+                            <span className="text-gray-600">Exam</span>
+                            <span className="text-gray-900 font-medium">{examData.title}</span>
+                        </div>
+                        <div className="flex justify-between text-sm">
+                            <span className="text-gray-600">Student</span>
+                            <span className="text-gray-900 font-medium">{studentName}</span>
+                        </div>
+                        <div className="flex justify-between text-sm">
+                            <span className="text-gray-600">Time Remaining</span>
+                            <span className="text-gray-900 font-bold">{formatTime(resumeAttempt.remainingTime)}</span>
+                        </div>
+                        <div className="flex justify-between text-sm">
+                            <span className="text-gray-600">Progress</span>
+                            <span className="text-gray-900 font-medium">{Object.keys(answers).length} / {questions.length}</span>
+                        </div>
+                        <div className="flex justify-between text-sm">
+                            <span className="text-gray-600">Exits Used</span>
+                            <span className="text-gray-900 font-medium">{resumeAttempt.exit_count || 0} / {examData.max_exits}</span>
                         </div>
                     </div>
 
-                    <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
-                        <div className="flex items-start gap-3">
-                            <AlertTriangle className="w-5 h-5 text-yellow-600 flex-shrink-0 mt-0.5" />
-                            <div className="text-sm text-yellow-800">
-                                <p className="font-semibold mb-1">Important:</p>
-                                <ul className="list-disc pl-4 space-y-1">
-                                    <li>Your previous answers have been saved</li>
-                                    <li>The timer will continue from where it stopped</li>
-                                    <li>You must complete the exam before the time expires</li>
-                                    <li>Exit count: {resumeAttempt.exit_count || 0} / {examData.max_exits}</li>
-                                </ul>
-                            </div>
-                        </div>
+                    <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-6">
+                        <p className="text-xs text-yellow-800">
+                            <strong>Note:</strong> Your answers are saved. The timer continues from where it stopped.
+                        </p>
                     </div>
 
                     <button
                         onClick={resumeExam}
                         disabled={!isOnline}
-                        className="w-full bg-green-600 text-white py-4 rounded-lg font-semibold text-lg hover:bg-green-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                        className="w-full bg-gray-900 text-white py-2.5 rounded-lg font-medium hover:bg-gray-800 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                     >
-                        <PlayCircle className="w-6 h-6" />
+                        <PlayCircle className="w-5 h-5" />
                         Continue Exam
                     </button>
 
                     {!isOnline && (
-                        <p className="text-center text-red-600 text-sm mt-4 flex items-center justify-center gap-2">
-                            <WifiOff className="w-4 h-4" />
+                        <p className="text-center text-red-600 text-xs mt-3 flex items-center justify-center gap-1">
+                            <WifiOff className="w-3 h-3" />
                             Waiting for internet connection...
                         </p>
                     )}
@@ -968,61 +931,42 @@ export default function StudentExamPage() {
         const isReturningStudent = savedName && !studentName
 
         return (
-            <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
-                <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl p-8">
+            <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+                <div className="bg-white rounded-xl border border-gray-200 w-full max-w-2xl p-8">
                     {isReturningStudent ? (
                         <div>
                             <div className="text-center mb-6">
-                                <div className="w-24 h-24 bg-blue-100 rounded-full mx-auto mb-4 flex items-center justify-center">
-                                    <PlayCircle className="w-12 h-12 text-blue-600" />
+                                <h1 className="text-2xl font-bold text-gray-900 mb-1">Welcome Back, {savedName}!</h1>
+                                <p className="text-gray-600 text-sm">Ready to start your exam?</p>
+                            </div>
+
+                            <div className="bg-gray-50 rounded-lg p-4 mb-4 space-y-2 text-sm">
+                                <div className="flex justify-between">
+                                    <span className="text-gray-600">Exam</span>
+                                    <span className="text-gray-900 font-medium">{examData.title}</span>
                                 </div>
-                                <h1 className="text-3xl font-bold text-gray-900 mb-2">Welcome Back, {savedName}!</h1>
-                                <p className="text-gray-600">Ready to start your exam?</p>
+                                <div className="flex justify-between">
+                                    <span className="text-gray-600">Duration</span>
+                                    <span className="text-gray-900 font-medium">{examData.duration_minutes} min</span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="text-gray-600">Questions</span>
+                                    <span className="text-gray-900 font-medium">{questions.length}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="text-gray-600">Pass Score</span>
+                                    <span className="text-gray-900 font-medium">{examData.pass_score}%</span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="text-gray-600">Max Exits</span>
+                                    <span className="text-gray-900 font-medium">{examData.max_exits}</span>
+                                </div>
                             </div>
 
-                            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
-                                <h2 className="font-semibold text-blue-900 mb-2">Exam Information</h2>
-                                <ul className="space-y-2 text-sm text-blue-800">
-                                    <li className="flex items-center gap-2">
-                                        <FileText className="w-4 h-4" />
-                                        <span>Exam: {examData.title}</span>
-                                    </li>
-                                    <li className="flex items-center gap-2">
-                                        <Timer className="w-4 h-4" />
-                                        <span>Duration: {examData.duration_minutes} minutes</span>
-                                    </li>
-                                    <li className="flex items-center gap-2">
-                                        <ClipboardList className="w-4 h-4" />
-                                        <span>Questions: {questions.length}</span>
-                                    </li>
-                                    <li className="flex items-center gap-2">
-                                        <Target className="w-4 h-4" />
-                                        <span>Total Points: {totalPoints}</span>
-                                    </li>
-                                    <li className="flex items-center gap-2">
-                                        <Award className="w-4 h-4" />
-                                        <span>Pass Score: {examData.pass_score}%</span>
-                                    </li>
-                                    <li className="flex items-center gap-2">
-                                        <DoorOpen className="w-4 h-4" />
-                                        <span>Maximum exits: {examData.max_exits}</span>
-                                    </li>
-                                </ul>
-                            </div>
-
-                            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
-                                <h2 className="font-semibold text-yellow-900 mb-2 flex items-center gap-2">
-                                    <AlertTriangle className="w-5 h-5" />
-                                    Important Rules
-                                </h2>
-                                <ul className="space-y-2 text-sm text-yellow-800">
-                                    <li>• The exam will run in fullscreen mode</li>
-                                    <li>• You have 10 seconds to return if you exit fullscreen</li>
-                                    <li>• After {examData.max_exits} exits, the exam will auto-submit</li>
-                                    <li>• If you disconnect, you can resume within 15 minutes</li>
-                                    <li>• Do not refresh or close this page</li>
-                                    <li>• Copy/paste and right-click are disabled</li>
-                                </ul>
+                            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-6">
+                                <p className="text-xs text-yellow-800">
+                                    <strong>Rules:</strong> Fullscreen required • 10s to return if you exit • Disconnections allowed within 15min
+                                </p>
                             </div>
 
                             <div className="flex gap-3">
@@ -1033,54 +977,59 @@ export default function StudentExamPage() {
                                         setResumeAttempt(null)
                                         setPhase('start')
                                     }}
-                                    className="px-6 py-4 bg-gray-100 text-gray-700 rounded-lg font-semibold hover:bg-gray-200 transition"
+                                    className="px-4 py-2.5 bg-gray-100 text-gray-700 rounded-lg font-medium hover:bg-gray-200 transition"
                                 >
-                                    Not {savedName}?
+                                    Not you?
                                 </button>
                                 <button
                                     onClick={() => startExam(savedName || undefined)}
                                     disabled={!isOnline}
-                                    className="flex-1 bg-blue-600 text-white py-4 rounded-lg font-semibold text-lg hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                                    className="flex-1 bg-gray-900 text-white py-2.5 rounded-lg font-medium hover:bg-gray-800 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                                 >
-                                    <PlayCircle className="w-6 h-6" />
+                                    <PlayCircle className="w-5 h-5" />
                                     {!isOnline ? 'Waiting for connection...' : 'Start Exam'}
                                 </button>
                             </div>
                         </div>
                     ) : (
                         <div>
-                            <h1 className="text-3xl font-bold text-gray-900 mb-2">{examData.title}</h1>
-                            {examData.description && (
-                                <p className="text-gray-600 mb-6">{examData.description}</p>
-                            )}
-
-                            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
-                                <h2 className="font-semibold text-blue-900 mb-2">Exam Information</h2>
-                                <ul className="space-y-2 text-sm text-blue-800">
-                                    <li>⏱ Duration: {examData.duration_minutes} minutes</li>
-                                    <li>📝 Questions: {questions.length}</li>
-                                    <li>🎯 Total Points: {totalPoints}</li>
-                                    <li>✓ Pass Score: {examData.pass_score}%</li>
-                                    <li>🚪 Maximum exits: {examData.max_exits}</li>
-                                </ul>
-                            </div>
-
-                            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
-                                <h2 className="font-semibold text-yellow-900 mb-2 flex items-center gap-2">
-                                    <AlertTriangle className="w-5 h-5" />
-                                    Important Rules
-                                </h2>
-                                <ul className="space-y-2 text-sm text-yellow-800">
-                                    <li>• The exam will run in fullscreen mode</li>
-                                    <li>• You have 10 seconds to return if you exit fullscreen</li>
-                                    <li>• After {examData.max_exits} exits, the exam will auto-submit</li>
-                                    <li>• If you disconnect, you can resume within 15 minutes</li>
-                                    <li>• Do not refresh or close this page</li>
-                                    <li>• Copy/paste and right-click are disabled</li>
-                                </ul>
-                            </div>
-
                             <div className="mb-6">
+                                <h1 className="text-2xl font-bold text-gray-900 mb-1">{examData.title}</h1>
+                                {examData.description && (
+                                    <p className="text-gray-600 text-sm">{examData.description}</p>
+                                )}
+                            </div>
+
+                            <div className="bg-gray-50 rounded-lg p-4 mb-4 space-y-2 text-sm">
+                                <div className="flex justify-between">
+                                    <span className="text-gray-600">Duration</span>
+                                    <span className="text-gray-900 font-medium">{examData.duration_minutes} min</span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="text-gray-600">Questions</span>
+                                    <span className="text-gray-900 font-medium">{questions.length}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="text-gray-600">Total Points</span>
+                                    <span className="text-gray-900 font-medium">{totalPoints}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="text-gray-600">Pass Score</span>
+                                    <span className="text-gray-900 font-medium">{examData.pass_score}%</span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="text-gray-600">Max Exits</span>
+                                    <span className="text-gray-900 font-medium">{examData.max_exits}</span>
+                                </div>
+                            </div>
+
+                            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-6">
+                                <p className="text-xs text-yellow-800">
+                                    <strong>Rules:</strong> Fullscreen required • 10s to return if you exit • Max {examData.max_exits} exits • Can resume within 15min if disconnected • No refresh/close
+                                </p>
+                            </div>
+
+                            <div className="mb-4">
                                 <label className="block text-sm font-medium text-gray-700 mb-2">
                                     Your Full Name *
                                 </label>
@@ -1093,7 +1042,7 @@ export default function StudentExamPage() {
                                             startExam()
                                         }
                                     }}
-                                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                    className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-900 focus:border-transparent"
                                     placeholder="Enter your full name"
                                     disabled={!isOnline}
                                     autoComplete="name"
@@ -1103,14 +1052,14 @@ export default function StudentExamPage() {
                             <button
                                 onClick={() => startExam()}
                                 disabled={!isOnline || !studentName.trim()}
-                                className="w-full bg-blue-600 text-white py-4 rounded-lg font-semibold text-lg hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                                className="w-full bg-gray-900 text-white py-2.5 rounded-lg font-medium hover:bg-gray-800 transition disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                                 {!isOnline ? 'Waiting for connection...' : 'Start Exam'}
                             </button>
 
                             {!isOnline && (
-                                <p className="text-center text-red-600 text-sm mt-4 flex items-center justify-center gap-2">
-                                    <WifiOff className="w-4 h-4" />
+                                <p className="text-center text-red-600 text-xs mt-3 flex items-center justify-center gap-1">
+                                    <WifiOff className="w-3 h-3" />
                                     No internet connection
                                 </p>
                             )}
@@ -1253,8 +1202,8 @@ export default function StudentExamPage() {
                     <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => !isSubmitting && setShowSubmitModal(false)} />
                     <div className="relative bg-white rounded-2xl shadow-2xl p-8 max-w-md w-full">
                         <div className="text-center">
-                            <div className="w-20 h-20 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-6">
-                                <CheckCircle className="w-12 h-12 text-blue-600" />
+                            <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-6">
+                                <CheckCircle className="w-12 h-12 text-gray-900" />
                             </div>
                             <h2 className="text-2xl font-bold text-gray-900 mb-2">Submit Exam?</h2>
                             <p className="text-gray-600 mb-4">
@@ -1285,7 +1234,7 @@ export default function StudentExamPage() {
                                 <button
                                     onClick={submitExamConfirmed}
                                     disabled={isSubmitting}
-                                    className="flex-1 py-3 px-6 bg-blue-600 text-white rounded-xl font-semibold hover:bg-blue-700 transition disabled:opacity-50 flex items-center justify-center gap-2"
+                                    className="flex-1 py-3 px-6 bg-gray-900 text-white rounded-xl font-semibold hover:bg-gray-800 transition disabled:opacity-50 flex items-center justify-center gap-2"
                                 >
                                     {isSubmitting ? (
                                         <>

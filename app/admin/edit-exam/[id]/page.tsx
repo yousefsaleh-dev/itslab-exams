@@ -24,26 +24,20 @@ export default function EditExamPage() {
 
     const fetchExamData = async () => {
         try {
-            // Fetch Exam
-            const { data: examData, error: examError } = await supabase
-                .from('exams')
-                .select('*')
-                .eq('id', params.id)
-                .single()
+            // Use API route to bypass RLS (service_role key)
+            const response = await fetch(`/api/exam/${params.id}/details`)
 
-            if (examError) throw examError
+            if (!response.ok) {
+                throw new Error('Failed to fetch exam data')
+            }
 
-            // Fetch Questions with Options
-            const { data: questionsData, error: questionsError } = await supabase
-                .from('questions')
-                .select(`
-                    *,
-                    options (*)
-                `)
-                .eq('exam_id', params.id)
-                .order('question_order')
+            const data = await response.json()
 
-            if (questionsError) throw questionsError
+            if (!data.success) {
+                throw new Error(data.error || 'Failed to load exam')
+            }
+
+            const { exam: examData, questions: questionsData } = data
 
             // Transform data to match ExamForm expected structure
             const questions: Question[] = questionsData.map((q: any) => ({
@@ -66,7 +60,7 @@ export default function EditExamPage() {
                 questions
             })
         } catch (error) {
-            console.error('Error fetching exam:', error)
+            // console.error('Error fetching exam:', error)
             toast.error('Failed to load exam details')
             router.push('/admin/dashboard')
         } finally {

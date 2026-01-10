@@ -157,7 +157,7 @@ Additional requirements:
 
             if (!response.ok) {
                 const errorData = await response.json()
-                console.error('API Error:', errorData)
+                // console.error('API Error:', errorData)
                 throw new Error(errorData.error || 'API request failed')
             }
 
@@ -183,7 +183,7 @@ Additional requirements:
             toast.success(`Generated ${newQuestions.length} questions!`)
             setAiPrompt('')
         } catch (error: any) {
-            console.error('AI Generation Error:', error)
+            // console.error('AI Generation Error:', error)
             toast.error('AI generation failed. Try adding questions manually or use a simpler prompt.')
         } finally {
             setAiLoading(false)
@@ -227,7 +227,17 @@ Additional requirements:
             let examId = initialData?.exam?.id
 
             if (isEditing && examId) {
-                // UPDATE EXAM
+                // SECURITY CHECK: Prevent question edits if students completed this exam
+                const { data: completedAttempts, error: checkError } = await supabase
+                    .from('student_attempts')
+                    .select('id')
+                    .eq('exam_id', examId)
+                    .eq('completed', true)
+                    .limit(1)
+
+                if (checkError) throw checkError
+
+                // UPDATE EXAM SETTINGS (always safe to update)
                 const { error: examError } = await supabase
                     .from('exams')
                     .update({
@@ -244,59 +254,70 @@ Additional requirements:
 
                 if (examError) throw examError
 
-                // Handle Questions for Edit
-                // This is a simplified approach: We will only UPSERT or INSERT questions, NOT DELETE for now to avoid FK issues with attempts.
-                // TODO: Handle deletions safely if possible, or just warn user. 
-                // Currently, deleted questions in UI will basically be 'ignored' from updates, but stay in DB.
-                // To properly handle sync:
-                // 1. Get all existing question IDs for this exam.
-                // 2. Compare with current questions list.
-                // 3. Delete missing ones (if no attempts linked, or soft delete/archive).
-                // For this iteration, we will simply UPSERT the current list.
+                // CHECK: If exam has completed attempts, only allow settings update
+                if (completedAttempts && completedAttempts.length > 0) {
+                    toast.success('Exam settings updated! ⚠️ Questions are locked (students have completed this exam)')
+                    router.push('/admin/dashboard')
+                    router.refresh()
+                    return
+                }
 
+                // Safe to update questions - no completed attempts yet
+                // Strategy: Delete all questions/options, then re-insert (prevents duplication)
+
+                // Step 1: Get all existing question IDs
+                const { data: existingQuestions } = await supabase
+                    .from('questions')
+                    .select('id')
+                    .eq('exam_id', examId)
+
+                // Step 2: Delete existing questions and options
+                if (existingQuestions && existingQuestions.length > 0) {
+                    const questionIds = existingQuestions.map(q => q.id)
+
+                    // Delete options first (avoid FK issues)
+                    await supabase
+                        .from('options')
+                        .delete()
+                        .in('question_id', questionIds)
+
+                    // Delete questions
+                    await supabase
+                        .from('questions')
+                        .delete()
+                        .eq('exam_id', examId)
+                }
+
+                // Step 3: Insert all current questions fresh
                 for (let i = 0; i < questions.length; i++) {
                     const q = questions[i]
-                    const qIsNew = q.id.includes('-') || !q.id // rough check for temp ID
 
-                    // Upsert Question
                     const { data: questionData, error: questionError } = await supabase
                         .from('questions')
-                        .upsert({
-                            id: qIsNew ? undefined : q.id, // Let DB generate ID if new
+                        .insert([{
                             exam_id: examId,
                             question_text: q.question_text,
                             question_order: i,
                             points: q.points
-                        })
+                        }])
                         .select()
                         .single()
 
                     if (questionError) throw questionError
 
-                    // Handle Options
-                    // Delete existing options for this question first? No, cascade might lose data.
-                    // Better to delete all options for this question and recreate?
-                    // Safe approach: Delete options for this question and re-insert. 
-                    // Options usually don't have FKs other than to question... oh wait, student_answers checks option_id.
-                    // If we delete options, we break student answers.
-                    // So we must UPSERT options too.
+                    // Insert options
+                    const optionsToInsert = q.options.map((opt, optIdx) => ({
+                        question_id: questionData.id,
+                        option_text: opt.option_text,
+                        is_correct: opt.is_correct,
+                        option_order: optIdx
+                    }))
 
-                    for (let optIdx = 0; optIdx < q.options.length; optIdx++) {
-                        const opt = q.options[optIdx]
-                        const optIsNew = opt.id.includes('-') || !opt.id
+                    const { error: optionsError } = await supabase
+                        .from('options')
+                        .insert(optionsToInsert)
 
-                        const { error: optionsError } = await supabase
-                            .from('options')
-                            .upsert({
-                                id: optIsNew ? undefined : opt.id,
-                                question_id: questionData.id,
-                                option_text: opt.option_text,
-                                is_correct: opt.is_correct,
-                                option_order: optIdx
-                            })
-
-                        if (optionsError) throw optionsError
-                    }
+                    if (optionsError) throw optionsError
                 }
 
                 toast.success('Exam updated successfully!')
@@ -359,7 +380,7 @@ Additional requirements:
             router.push('/admin/dashboard')
             router.refresh()
         } catch (error) {
-            console.error(error)
+            // console.error(error)
             toast.error(isEditing ? 'Failed to update exam' : 'Failed to save exam')
         } finally {
             setSaving(false)
@@ -367,18 +388,18 @@ Additional requirements:
     }
 
     return (
-        <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50">
-            <header className="bg-white/80 backdrop-blur-md shadow-sm border-b border-gray-200/50 sticky top-0 z-10">
+        <div className="min-h-screen bg-gray-50">
+            <header className="bg-white border-b border-gray-200 sticky top-0 z-10">
                 <div className="max-w-7xl mx-auto px-4 py-4 sm:px-6 lg:px-8">
                     <div className="flex items-center gap-4">
                         <Link
                             href="/admin/dashboard"
-                            className="p-2 hover:bg-gradient-to-r hover:from-blue-50 hover:to-indigo-50 rounded-lg transition-all duration-200"
+                            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
                         >
                             <ArrowLeft className="w-5 h-5 text-gray-700" />
                         </Link>
                         <div>
-                            <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
+                            <h1 className="text-2xl font-bold text-gray-900">
                                 {isEditing ? 'Edit Exam' : 'Create New Exam'}
                             </h1>
                             <p className="text-sm text-gray-600">
@@ -391,32 +412,28 @@ Additional requirements:
 
             <main className="max-w-5xl mx-auto px-4 py-8 sm:px-6 lg:px-8">
                 {/* Exam Details */}
-                <div className="bg-white/90 backdrop-blur-sm rounded-2xl shadow-lg border border-gray-200/50 p-6 mb-6 hover:shadow-xl transition-shadow duration-300">
+                <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
                     <div className="flex items-center gap-2 mb-6">
-                        <div className="p-2 bg-gradient-to-br from-blue-500 to-indigo-500 rounded-lg">
-                            <FileText className="w-5 h-5 text-white" />
-                        </div>
+                        <FileText className="w-5 h-5 text-gray-900" />
                         <h2 className="text-xl font-semibold text-gray-900">Exam Details</h2>
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                         <div>
-                            <label className="flex items-center gap-2 text-sm font-medium text-gray-700 mb-2">
-                                <FileText className="w-4 h-4 text-blue-600" />
+                            <label className="block text-sm font-medium text-gray-700 mb-2">
                                 Exam Title *
                             </label>
                             <input
                                 type="text"
                                 value={title}
                                 onChange={(e) => setTitle(e.target.value)}
-                                className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 hover:border-gray-400"
+                                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-900 focus:border-transparent transition-colors"
                                 placeholder="e.g., JavaScript Fundamentals"
                             />
                         </div>
 
                         <div>
-                            <label className="flex items-center gap-2 text-sm font-medium text-gray-700 mb-2">
-                                <Clock className="w-4 h-4 text-blue-600" />
+                            <label className="block text-sm font-medium text-gray-700 mb-2">
                                 Duration (minutes) *
                             </label>
                             <input
@@ -424,7 +441,7 @@ Additional requirements:
                                 value={duration}
                                 onChange={(e) => setDuration(Number(e.target.value))}
                                 min="1"
-                                className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 hover:border-gray-400"
+                                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-900 focus:border-transparent transition-colors"
                             />
                         </div>
                     </div>
@@ -438,7 +455,7 @@ Additional requirements:
                             value={description}
                             onChange={(e) => setDescription(e.target.value)}
                             rows={3}
-                            className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 hover:border-gray-400"
+                            className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-900 focus:border-transparent transition-colors"
                             placeholder="Brief description of the exam"
                         />
                     </div>
@@ -474,36 +491,36 @@ Additional requirements:
                             />
                         </div>
 
-                        <div className="flex items-center gap-3 p-3 bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl border border-blue-200/50">
+                        <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
                             <input
                                 type="checkbox"
                                 id="shuffle-q"
                                 checked={shuffleQuestions}
                                 onChange={(e) => setShuffleQuestions(e.target.checked)}
-                                className="w-4 h-4 text-blue-600 rounded focus:ring-2 focus:ring-blue-500"
+                                className="w-4 h-4 text-gray-900 rounded focus:ring-2 focus:ring-gray-900"
                             />
                             <label htmlFor="shuffle-q" className="flex items-center gap-1.5 text-sm text-gray-700 cursor-pointer">
-                                <Shuffle className="w-3.5 h-3.5 text-blue-600" />
+                                <Shuffle className="w-3.5 h-3.5 text-gray-900" />
                                 Shuffle Questions
                             </label>
                         </div>
 
-                        <div className="flex items-center gap-3 p-3 bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl border border-blue-200/50">
+                        <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
                             <input
                                 type="checkbox"
                                 id="shuffle-o"
                                 checked={shuffleOptions}
                                 onChange={(e) => setShuffleOptions(e.target.checked)}
-                                className="w-4 h-4 text-blue-600 rounded focus:ring-2 focus:ring-blue-500"
+                                className="w-4 h-4 text-gray-900 rounded focus:ring-2 focus:ring-gray-900"
                             />
                             <label htmlFor="shuffle-o" className="flex items-center gap-1.5 text-sm text-gray-700 cursor-pointer">
-                                <Shuffle className="w-3.5 h-3.5 text-blue-600" />
+                                <Shuffle className="w-3.5 h-3.5 text-gray-900" />
                                 Shuffle Options
                             </label>
                         </div>
                     </div>
 
-                    <div className="flex items-center gap-3 p-3 bg-gradient-to-br from-green-50 to-emerald-50 rounded-xl border border-green-200/50">
+                    <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
                         <input
                             type="checkbox"
                             id="show-results"
@@ -519,14 +536,14 @@ Additional requirements:
                 </div>
 
                 {/* AI Generation */}
-                <div className="bg-gradient-to-br from-purple-500 via-violet-500 to-indigo-500 rounded-2xl shadow-xl p-6 mb-6 border border-purple-300/50 hover:shadow-2xl transition-all duration-300">
+                <div className="bg-gray-900 rounded-xl p-6 mb-6 border border-gray-800">
                     <div className="flex items-center gap-3 mb-4">
-                        <div className="p-2 bg-white/20 backdrop-blur-sm rounded-lg">
+                        <div className="p-2 bg-white/10 rounded-lg">
                             <Sparkles className="w-6 h-6 text-white" />
                         </div>
                         <div>
                             <h2 className="text-xl font-semibold text-white">AI Question Generator</h2>
-                            <p className="text-sm text-purple-100">Let AI create questions for you with advanced controls</p>
+                            <p className="text-sm text-gray-300">Let AI create questions for you with advanced controls</p>
                         </div>
                     </div>
 
@@ -602,11 +619,11 @@ Additional requirements:
                         <button
                             onClick={generateWithAI}
                             disabled={aiLoading}
-                            className="px-6 py-3 bg-white text-purple-600 rounded-xl hover:bg-purple-50 transition-all duration-200 font-semibold disabled:opacity-50 flex items-center gap-2 shadow-lg hover:shadow-xl"
+                            className="px-6 py-3 bg-white text-gray-900 rounded-lg hover:bg-gray-100 transition-colors font-semibold disabled:opacity-50 flex items-center gap-2 shadow-md"
                         >
                             {aiLoading ? (
                                 <>
-                                    <div className="w-5 h-5 border-2 border-purple-600 border-t-transparent rounded-full animate-spin" />
+                                    <div className="w-5 h-5 border-2 border-gray-900 border-t-transparent rounded-full animate-spin" />
                                     Generating...
                                 </>
                             ) : (
@@ -620,12 +637,12 @@ Additional requirements:
                 </div>
 
                 {/* Questions List */}
-                <div className="bg-white/90 backdrop-blur-sm rounded-2xl shadow-lg border border-gray-200/50 p-6 mb-6">
+                <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
                     <div className="flex justify-between items-center mb-4">
                         <h2 className="text-xl font-semibold text-gray-900">Questions ({questions.length})</h2>
                         <button
                             onClick={addManualQuestion}
-                            className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-500 to-indigo-500 text-white rounded-xl hover:from-blue-600 hover:to-indigo-600 transition-all duration-200 shadow-md hover:shadow-lg"
+                            className="flex items-center gap-2 px-4 py-2 bg-gray-900 text-white rounded-lg hover:bg-gray-800 transition-colors shadow-md"
                         >
                             <Plus className="w-5 h-5" />
                             Add Manual
@@ -639,7 +656,7 @@ Additional requirements:
                     ) : (
                         <div className="space-y-6">
                             {questions.map((question, qIdx) => (
-                                <div key={question.id} className="border border-gray-200 rounded-xl p-4 bg-gradient-to-br from-gray-50 to-blue-50/30 hover:shadow-md transition-shadow duration-200">
+                                <div key={question.id} className="border border-gray-200 rounded-lg p-4 bg-white hover:shadow-sm transition-shadow">
                                     <div className="flex justify-between items-start mb-3">
                                         <span className="font-semibold text-gray-700 bg-blue-100 px-3 py-1 rounded-lg">Question {qIdx + 1}</span>
                                         <button
@@ -718,7 +735,7 @@ Additional requirements:
                     <button
                         onClick={saveExam}
                         disabled={saving}
-                        className="flex items-center gap-2 px-8 py-3 bg-gradient-to-r from-green-500 to-emerald-500 text-white rounded-xl hover:from-green-600 hover:to-emerald-600 transition-all duration-200 font-semibold disabled:opacity-50 shadow-lg hover:shadow-xl"
+                        className="flex items-center gap-2 px-8 py-3 bg-gray-900 text-white rounded-lg hover:bg-gray-800 transition-colors font-semibold disabled:opacity-50 shadow-md"
                     >
                         {saving ? (
                             <>
