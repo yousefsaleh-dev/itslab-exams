@@ -16,11 +16,28 @@ ADD COLUMN IF NOT EXISTS auto_submit_reason TEXT,
 ADD COLUMN IF NOT EXISTS recovery_count INTEGER DEFAULT 0,
 ADD COLUMN IF NOT EXISTS last_recovery_at TIMESTAMPTZ;
 
+-- Add columns for offline grace period tracking
+ALTER TABLE student_attempts
+ADD COLUMN IF NOT EXISTS total_offline_seconds INTEGER DEFAULT 0 NOT NULL,
+ADD COLUMN IF NOT EXISTS went_offline_at TIMESTAMPTZ DEFAULT NULL;
+
+-- Add offline grace period to exams table
+ALTER TABLE exams
+ADD COLUMN IF NOT EXISTS offline_grace_minutes INTEGER DEFAULT 10 CHECK (offline_grace_minutes >= 0);
+
+-- Add exit warning countdown to exams table
+ALTER TABLE exams
+ADD COLUMN IF NOT EXISTS exit_warning_seconds INTEGER DEFAULT 10 CHECK (exit_warning_seconds >= 5 AND exit_warning_seconds <= 60);
+
 -- Add comment for documentation
 COMMENT ON COLUMN student_attempts.auto_submitted IS 'Whether this attempt was auto-submitted by the system';
-COMMENT ON COLUMN student_attempts.auto_submit_reason IS 'Reason for auto-submit: time_expired | inactivity | system_error';
+COMMENT ON COLUMN student_attempts.auto_submit_reason IS 'Reason for auto-submit: time_expired | system_error';
 COMMENT ON COLUMN student_attempts.recovery_count IS 'Number of times this attempt was recovered from localStorage loss';
 COMMENT ON COLUMN student_attempts.last_recovery_at IS 'Last time this attempt was recovered';
+COMMENT ON COLUMN student_attempts.total_offline_seconds IS 'Total time spent offline (cumulative), capped at grace limit. Event-based tracking.';
+COMMENT ON COLUMN student_attempts.went_offline_at IS 'Timestamp when student last went offline. NULL when online or grace exhausted.';
+COMMENT ON COLUMN exams.offline_grace_minutes IS 'Grace period (minutes) for offline students. Main timer pauses during this time. Default: 10 minutes.';
+COMMENT ON COLUMN exams.exit_warning_seconds IS 'Countdown duration (seconds) before exam fails when exiting fullscreen. Default: 10 seconds.';
 
 -- ========================================
 -- STEP 2: Create recovery audit log table

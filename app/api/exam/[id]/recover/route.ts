@@ -48,19 +48,19 @@ export async function POST(
 
         const studentName = body.studentName.trim()
 
-        console.log(`[Recovery] Attempting recovery for student: ${studentName}, exam: ${examId}`)
+        // console.log(`[Recovery] Attempting recovery for student: ${studentName}, exam: ${examId}`)
 
-        // 1. Check for completed attempt first
+        // 1. Check for completed attempt first (case-insensitive)
         const { data: completedAttempt } = await supabase
             .from('student_attempts')
             .select('id, score, time_spent_seconds, completed_at')
             .eq('exam_id', examId)
-            .eq('student_name', studentName)
+            .ilike('student_name', studentName)
             .eq('completed', true)
             .maybeSingle()
 
         if (completedAttempt) {
-            console.log(`[Recovery] Found completed attempt for ${studentName}`)
+            // console.log(`[Recovery] Found completed attempt for ${studentName}`)
             return NextResponse.json({
                 success: true,
                 found: true,
@@ -85,12 +85,12 @@ export async function POST(
         )
       `)
             .eq('exam_id', examId)
-            .eq('student_name', studentName)
+            .ilike('student_name', studentName)
             .eq('completed', false)
             .maybeSingle()
 
         if (attemptError) {
-            console.error('[Recovery] Error fetching incomplete attempt:', attemptError)
+            // console.error('[Recovery] Error fetching incomplete attempt:', attemptError)
             return NextResponse.json({
                 success: false,
                 found: false,
@@ -99,7 +99,7 @@ export async function POST(
         }
 
         if (!incompleteAttempt) {
-            console.log(`[Recovery] No incomplete attempt found for ${studentName}`)
+            // console.log(`[Recovery] No incomplete attempt found for ${studentName}`)
             return NextResponse.json({
                 success: true,
                 found: false,
@@ -110,7 +110,7 @@ export async function POST(
         const examData = incompleteAttempt.exam as any
 
         if (!examData.is_active) {
-            console.log(`[Recovery] Exam not active for ${studentName}`)
+            // console.log(`[Recovery] Exam not active for ${studentName}`)
             return NextResponse.json({
                 success: false,
                 found: true,
@@ -128,19 +128,19 @@ export async function POST(
         // Safety check: if last_activity is unreasonably old, use stored time
         if (timeSinceLastActivity > examData.duration_minutes * 60) {
             remainingTime = incompleteAttempt.time_remaining_seconds || 0
-            console.log(`[Recovery] Using stored time for ${studentName} (last activity too old)`)
+            // console.log(`[Recovery] Using stored time for ${studentName} (last activity too old)`)
         } else {
             // Normal case: subtract elapsed time
             remainingTime = Math.max(
                 0,
                 (incompleteAttempt.time_remaining_seconds || 0) - timeSinceLastActivity
             )
-            console.log(`[Recovery] Calculated remaining time: ${remainingTime}s for ${studentName}`)
+            // console.log(`[Recovery] Calculated remaining time: ${remainingTime}s for ${studentName}`)
         }
 
         // 4. Check if time expired
         if (remainingTime <= 0) {
-            console.log(`[Recovery] Time expired for ${studentName}`)
+            // console.log(`[Recovery] Time expired for ${studentName}`)
             return NextResponse.json({
                 success: true,
                 found: true,
@@ -156,7 +156,7 @@ export async function POST(
             .eq('attempt_id', incompleteAttempt.id)
 
         if (answersError) {
-            console.error('[Recovery] Error fetching answers:', answersError)
+            // console.error('[Recovery] Error fetching answers:', answersError)
             return NextResponse.json({
                 success: false,
                 found: true,
@@ -173,26 +173,16 @@ export async function POST(
             })
         }
 
-        console.log(`[Recovery] Found ${Object.keys(answersMap).length} saved answers for ${studentName}`)
+        // console.log(`[Recovery] Found ${Object.keys(answersMap).length} saved answers for ${studentName}`)
 
-        // 6. Log recovery attempt
-        try {
-            await supabase.rpc('log_attempt_recovery', {
-                p_attempt_id: incompleteAttempt.id,
-                p_method: 'api_recovery',
-                p_previous_state: {
-                    time_remaining: incompleteAttempt.time_remaining_seconds,
-                    last_activity: incompleteAttempt.last_activity
-                },
-                p_new_state: {
-                    time_remaining: remainingTime,
-                    recovery_time: new Date().toISOString()
-                }
-            })
-        } catch (rpcError) {
-            // Log error but don't fail recovery
-            console.warn('[Recovery] Failed to log recovery attempt:', rpcError)
-        }
+        // 6. Log recovery attempt (no RPC - just console log for now)
+        // console.log(`[Recovery] Session recovered for ${studentName}:`, {
+        //     attemptId: incompleteAttempt.id,
+        //     method: 'api_recovery',
+        //     previousTimeRemaining: incompleteAttempt.time_remaining_seconds,
+        //     newTimeRemaining: remainingTime,
+        //     recoveryTime: new Date().toISOString()
+        // })
 
         // 7. Update last_activity to NOW
         const { error: updateError } = await supabase
@@ -204,12 +194,12 @@ export async function POST(
             .eq('id', incompleteAttempt.id)
 
         if (updateError) {
-            console.error('[Recovery] Failed to update last_activity:', updateError)
+            // console.error('[Recovery] Failed to update last_activity:', updateError)
             // Continue anyway - not critical
         }
 
         // 8. Return recovery data
-        console.log(`[Recovery] Successfully recovered attempt for ${studentName}`)
+        // console.log(`[Recovery] Successfully recovered attempt for ${studentName}`)
         return NextResponse.json({
             success: true,
             found: true,
@@ -225,7 +215,7 @@ export async function POST(
         })
 
     } catch (error) {
-        console.error('[Recovery] Fatal error:', error)
+        // console.error('[Recovery] Fatal error:', error)
         return NextResponse.json({
             success: false,
             found: false,

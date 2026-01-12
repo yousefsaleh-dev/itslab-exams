@@ -6,6 +6,7 @@ import { supabase, Exam, Question, Option } from '@/lib/supabase'
 import { useExamStore } from '@/lib/store'
 import { Clock, AlertTriangle, CheckCircle, XCircle, WifiOff, PlayCircle, FileText, Timer, ClipboardList, Target, Award, DoorOpen, Flag } from 'lucide-react'
 import toast from 'react-hot-toast'
+import { useExamProtection } from '@/hooks/useExamProtection'
 
 type ExamQuestion = Question & { options: Option[] }
 
@@ -40,6 +41,19 @@ export default function StudentExamPage() {
     const [flaggedQuestions, setFlaggedQuestions] = useState<Record<string, boolean>>({})
     const [fontSize, setFontSize] = useState<'base' | 'lg' | 'xl'>('base')
 
+    // Offline grace period state
+    const [totalOfflineSeconds, setTotalOfflineSeconds] = useState(0)
+    const [currentOfflineDuration, setCurrentOfflineDuration] = useState(0)
+    const blurCountRef = useRef(0) // MEDIUM-3 fix: persist blur count across re-renders
+
+    // Timer warnings state
+    const [warningShown5min, setWarningShown5min] = useState(false)
+    const [warningShown1min, setWarningShown1min] = useState(false)
+
+    // Security tracking
+    const [devToolsDetected, setDevToolsDetected] = useState(false)
+    const copyAttemptsRef = useRef(0)
+
     const { attemptId, answers, exitCount, setAttemptId, setAnswer, incrementExitCount, reset, setExitCount } = useExamStore()
 
     // Refs
@@ -47,6 +61,15 @@ export default function StudentExamPage() {
     const countdownIntervalRef = useRef<NodeJS.Timeout | null>(null)
     const timerIntervalRef = useRef<NodeJS.Timeout | null>(null)
     const exitWarningActiveRef = useRef<boolean>(false)
+
+    // ====== SYNC WARNING COUNTDOWN WHEN EXAM LOADS ======
+    useEffect(() => {
+        if (exam?.exit_warning_seconds) {
+            setWarningCountdown(exam.exit_warning_seconds)
+            warningCountdownRef.current = exam.exit_warning_seconds
+        }
+    }, [exam])
+
     const submitExamRef = useRef<(() => Promise<void>) | null>(null)
     const lastSyncTimeRef = useRef<number>(0)
     const submitTimeoutRef = useRef<NodeJS.Timeout | null>(null)
@@ -95,6 +118,12 @@ export default function StudentExamPage() {
             const { exam: examData, questions: questionsData } = await response.json()
 
             setExam(examData)
+
+            // Update warning countdown from loaded exam
+            if (examData?.exit_warning_seconds) {
+                setWarningCountdown(examData.exit_warning_seconds)
+                warningCountdownRef.current = examData.exit_warning_seconds
+            }
 
             let processedQuestions = questionsData as ExamQuestion[]
 
@@ -153,14 +182,108 @@ export default function StudentExamPage() {
         }
     }
 
+    // ====== SECURITY CALLBACKS ======
+    const handleDevToolsDetected = useCallback(async () => {
+        if (!attemptId) return
+
+        // Only set state once to avoid multiple toasts
+        if (!devToolsDetected) {
+            setDevToolsDetected(true)
+            toast.error('Developer tools detected! This is being recorded.', {
+                duration: 5000
+            })
+        }
+
+        // Fetch current suspicious_activities
+        const { data: attempt, error: fetchError } = await supabase
+            .from('student_attempts')
+            .select('suspicious_activities')
+            .eq('id', attemptId)
+            .single()
+
+        if (fetchError) {
+            // console.error('❌ Failed to fetch attempt:', fetchError)
+            return
+        }
+
+        const activities = Array.isArray(attempt?.suspicious_activities) ? attempt.suspicious_activities : []
+        activities.push({
+            type: 'devtools_detected',
+            timestamp: new Date().toISOString(),
+            details: 'Developer tools detected'
+        })
+
+        // Update DB
+        const { error } = await supabase.from('student_attempts').update({
+            suspicious_activities: activities,
+            last_activity: new Date().toISOString()
+        }).eq('id', attemptId)
+
+        if (error) {
+            // console.error('❌ Failed to update devtools:', error)
+        } else {
+            // console.log('✅ DevTools logged')
+        }
+    }, [attemptId, devToolsDetected])
+
+    const handleCopyAttempt = useCallback(async (customMessage?: string) => {
+        if (!attemptId) return
+
+        copyAttemptsRef.current++
+
+        // Fetch current suspicious_activities
+        const { data: attempt, error: fetchError } = await supabase
+            .from('student_attempts')
+            .select('suspicious_activities')
+            .eq('id', attemptId)
+            .single()
+
+        if (fetchError) {
+            console.error('❌ Failed to fetch attempt:', fetchError)
+            return
+        }
+
+        const activities = Array.isArray(attempt?.suspicious_activities) ? attempt.suspicious_activities : []
+        activities.push({
+            type: 'copy_attempt',
+            timestamp: new Date().toISOString(),
+            details: customMessage || `Copy attempt #${copyAttemptsRef.current}`
+        })
+
+        // Update DB  
+        const { error } = await supabase.from('student_attempts').update({
+            suspicious_activities: activities,
+            last_activity: new Date().toISOString()
+        }).eq('id', attemptId)
+
+        if (error) {
+            // console.error('❌ Failed to update copy:', error)
+        } else {
+            // console.log(`✅ Copy attempt #${copyAttemptsRef.current} - updated DB`)
+        }
+    }, [attemptId])
+
+    // ====== USE EXAM PROTECTION HOOK ======
+    useExamProtection({
+        phase,
+        attemptId,
+        timeLeft,
+        onDevToolsDetected: handleDevToolsDetected,
+        onCopyAttempt: handleCopyAttempt,
+        warningShown5min,
+        warningShown1min,
+        setWarningShown5min,
+        setWarningShown1min
+    })
+
     // ====== START EXAM ======
-    const startExam = async (nameOverride?: string) => {
+    const startExam = async (savedStudentName?: string) => {
         if (!isOnline) {
             toast.error('Cannot start exam while offline')
             return
         }
 
-        const examStudentName = nameOverride || studentName
+        const examStudentName = savedStudentName || studentName
         if (!examStudentName.trim()) {
             toast.error('Please enter your name')
             return
@@ -168,13 +291,43 @@ export default function StudentExamPage() {
 
         if (!exam) return
 
+        // ====== SERVER-SIDE ACCESS CODE VERIFICATION ======
+        if (exam.requires_access_code) {
+            const enteredCode = prompt('This exam requires an access code. Please enter it:')
+
+            if (!enteredCode) {
+                toast.error('Access code is required to start this exam.')
+                return
+            }
+
+            try {
+                const verifyResponse = await fetch(`/api/exam/${params.id}/verify-access-code`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ accessCode: enteredCode.trim() })
+                })
+
+                const verifyResult = await verifyResponse.json()
+
+                if (!verifyResponse.ok || !verifyResult.valid) {
+                    toast.error('Invalid access code. Cannot start exam.')
+                    return
+                }
+
+                toast.success('Access code verified!')
+            } catch (error) {
+                toast.error('Failed to verify access code. Please try again.')
+                return
+            }
+        }
+
         try {
-            // Check if already completed
+            // Check if already completed (case-insensitive name match)
             const { data: completedAttempt } = await supabase
                 .from('student_attempts')
                 .select('*')
                 .eq('exam_id', params.id)
-                .eq('student_name', examStudentName.trim())
+                .ilike('student_name', examStudentName.trim())
                 .eq('completed', true)
                 .maybeSingle()
 
@@ -188,60 +341,54 @@ export default function StudentExamPage() {
                 return
             }
 
-            // Check for incomplete attempt
+            // Check for incomplete attempt (case-insensitive name match)
             const { data: incompleteAttempt } = await supabase
                 .from('student_attempts')
                 .select('*')
                 .eq('exam_id', params.id)
-                .eq('student_name', examStudentName.trim())
+                .ilike('student_name', examStudentName.trim())
                 .eq('completed', false)
                 .maybeSingle()
 
             if (incompleteAttempt) {
-                // FIX #6 (MEDIUM): Validate name matches
-                if (incompleteAttempt.student_name !== examStudentName.trim()) {
-                    toast.error('Name does not match previous attempt. Starting new exam.')
-                    // Fall through to create new attempt
-                } else {
-                    // Calculate remaining time
-                    let remaining: number
-                    const lastActivity = incompleteAttempt.last_activity || incompleteAttempt.created_at
-                    const timeSinceLastActivity = Math.floor((Date.now() - new Date(lastActivity).getTime()) / 1000)
+                // Calculate remaining time
+                let remaining: number
+                const lastActivity = incompleteAttempt.last_activity || incompleteAttempt.created_at
+                const timeSinceLastActivity = Math.floor((Date.now() - new Date(lastActivity).getTime()) / 1000)
 
-                    if (incompleteAttempt.time_remaining_seconds != null) {
-                        // SAFETY CHECK FIRST
-                        if (timeSinceLastActivity > exam.duration_minutes * 60) {
-                            remaining = incompleteAttempt.time_remaining_seconds
-                        } else {
-                            // Subtract time that passed since last activity
-                            remaining = Math.max(0, incompleteAttempt.time_remaining_seconds - timeSinceLastActivity)
-                        }
+                if (incompleteAttempt.time_remaining_seconds != null) {
+                    // SAFETY CHECK FIRST
+                    if (timeSinceLastActivity > exam.duration_minutes * 60) {
+                        remaining = incompleteAttempt.time_remaining_seconds
                     } else {
-                        const elapsedTime = Math.floor((Date.now() - new Date(incompleteAttempt.created_at).getTime()) / 1000)
-                        remaining = Math.max(0, (exam.duration_minutes * 60) - elapsedTime)
+                        // Subtract time that passed since last activity
+                        remaining = Math.max(0, incompleteAttempt.time_remaining_seconds - timeSinceLastActivity)
                     }
+                } else {
+                    const elapsedTime = Math.floor((Date.now() - new Date(incompleteAttempt.created_at).getTime()) / 1000)
+                    remaining = Math.max(0, (exam.duration_minutes * 60) - elapsedTime)
+                }
 
-                    if (remaining <= 0) {
-                        toast.error('Your previous exam time has expired')
-                        await autoSubmitExpiredAttempt(incompleteAttempt.id, exam, questions)
-                        return
-                    }
-
-                    // Show resume screen
-                    localStorage.setItem(`exam_${params.id}_student_name`, examStudentName.trim())
-                    setStudentName(examStudentName)
-
-                    // Pass the correctly calculated remaining time to resume screen
-                    const correctRemainingTime = Math.max(1, remaining)
-                    setResumeAttempt({
-                        ...incompleteAttempt,
-                        remainingTime: correctRemainingTime,
-                        calculatedAt: Date.now()
-                    })
-
-                    setPhase('resume')
+                if (remaining <= 0) {
+                    toast.error('Your previous exam time has expired')
+                    await autoSubmitExpiredAttempt(incompleteAttempt.id, exam, questions)
                     return
                 }
+
+                // Show resume screen
+                localStorage.setItem(`exam_${params.id}_student_name`, examStudentName.trim())
+                setStudentName(examStudentName)
+
+                // Pass the correctly calculated remaining time to resume screen
+                const correctRemainingTime = Math.max(1, remaining)
+                setResumeAttempt({
+                    ...incompleteAttempt,
+                    remainingTime: correctRemainingTime,
+                    calculatedAt: Date.now()
+                })
+
+                setPhase('resume')
+                return
             }
 
             // Create new attempt
@@ -256,6 +403,7 @@ export default function StudentExamPage() {
                     exit_count: 0,
                     time_remaining_seconds: exam.duration_minutes * 60,
                     last_activity: new Date().toISOString(),
+                    started_at: new Date().toISOString(),
                 }])
                 .select()
 
@@ -316,6 +464,10 @@ export default function StudentExamPage() {
                 })
                 .eq('id', resumeAttempt.id)
 
+            // Reset timer warnings for fresh session
+            setWarningShown5min(false)
+            setWarningShown1min(false)
+
             // Set time and start exam
             setTimeLeft(finalRemainingTime)
             setPhase('exam')
@@ -356,7 +508,7 @@ export default function StudentExamPage() {
                 // Special handling for time exceeded after network outage
                 if (response.status === 403 && error.timeExceeded) {
                     // Time exceeded but within grace period - show result screen
-                    console.log('[Submit] Time exceeded - showing result screen')
+                    // console.log('[Submit] Time exceeded - showing result screen')
                     toast('Exam submitted after time limit. Results may be affected.', {
                         icon: '⚠️',
                         duration: 5000
@@ -389,7 +541,7 @@ export default function StudentExamPage() {
             toast.success('Exam submitted successfully!')
 
         } catch (error: any) {
-            console.error('[Submit] Error:', error)
+            // console.error('[Submit] Error:', error)
 
             // Improved error handling with retry logic
             const isNetworkError = !navigator.onLine || error.message?.includes('fetch')
@@ -411,7 +563,7 @@ export default function StudentExamPage() {
                 // Schedule retry
                 submitTimeoutRef.current = setTimeout(() => {
                     if (phase === 'exam' && !isSubmitting) {
-                        console.log(`[Submit] Retry attempt ${submitRetryCount + 1}/3`)
+                        // console.log(`[Submit] Retry attempt ${submitRetryCount + 1}/3`)
                         submitExamConfirmed()
                     }
                 }, retryDelay)
@@ -513,11 +665,14 @@ export default function StudentExamPage() {
 
             exitWarningActiveRef.current = true
             setExitWarningActive(true)
-            setWarningCountdown(10)
+
+            // Use ref value for correct countdown duration
+            const initialCountdown = warningCountdownRef.current
+            setWarningCountdown(initialCountdown)
 
             toast.error(`Exit ${currentExitCount}/${maxExits} detected! Return to fullscreen!`)
 
-            let countdown = 10
+            let countdown = initialCountdown
             const interval = setInterval(() => {
                 countdown--
                 setWarningCountdown(countdown)
@@ -528,12 +683,13 @@ export default function StudentExamPage() {
             const timeout = setTimeout(() => {
                 if (countdownIntervalRef.current) {
                     clearInterval(countdownIntervalRef.current)
+                    countdownIntervalRef.current = null
                 }
                 toast.error('Time expired! Auto-submitting exam...')
                 exitWarningActiveRef.current = false
                 setExitWarningActive(false)
                 submitExamConfirmed()
-            }, 10000)
+            }, initialCountdown * 1000) // Use configured duration
             warningTimeoutRef.current = timeout
 
         } else if (isNowFullScreen && exitWarningActiveRef.current) {
@@ -565,7 +721,7 @@ export default function StudentExamPage() {
             if (!savedName) return
 
             try {
-                console.log('[Auto-Recovery] Attempting to recover exam state...')
+                // console.log('[Auto-Recovery] Attempting to recover exam state...')
 
                 // Call Recovery API
                 const response = await fetch(`/api/exam/${params.id}/recover`, {
@@ -577,7 +733,7 @@ export default function StudentExamPage() {
                 const result = await response.json()
 
                 if (result.success && result.found && result.data) {
-                    console.log('[Auto-Recovery] State recovered successfully!')
+                    // console.log('[Auto-Recovery] State recovered successfully!')
 
                     // Restore all state from recovery data
                     setAttemptId(result.data.attemptId)
@@ -604,17 +760,17 @@ export default function StudentExamPage() {
                     setPhase('resume')
 
                 } else if (result.expired) {
-                    console.log('[Auto-Recovery] Exam has expired')
+                    // console.log('[Auto-Recovery] Exam has expired')
                     toast.error('Your exam has expired')
                     if (result.found) {
                         setStudentName(savedName)
                         setPhase('result')
                     }
                 } else {
-                    console.log('[Auto-Recovery] No incomplete attempt found')
+                    // console.log('[Auto-Recovery] No incomplete attempt found')
                 }
             } catch (error) {
-                console.error('[Auto-Recovery] Failed:', error)
+                // console.error('[Auto-Recovery] Failed:', error)
                 toast.error('Failed to recover exam session')
             }
         }
@@ -636,7 +792,7 @@ export default function StudentExamPage() {
                     .from('student_attempts')
                     .select('*')
                     .eq('exam_id', params.id)
-                    .eq('student_name', savedName)
+                    .ilike('student_name', savedName)
                     .eq('completed', true)
                     .maybeSingle()
 
@@ -653,7 +809,7 @@ export default function StudentExamPage() {
                     .from('student_attempts')
                     .select('*')
                     .eq('exam_id', params.id)
-                    .eq('student_name', savedName)
+                    .ilike('student_name', savedName)
                     .eq('completed', false)
                     .maybeSingle()
 
@@ -749,8 +905,25 @@ export default function StudentExamPage() {
 
         // Start new interval
         timerIntervalRef.current = setInterval(() => {
+            // Calculate grace period (do this every second for real-time updates)
+            const graceLimit = (exam?.offline_grace_minutes || 10) * 60
+            const graceUsed = totalOfflineSeconds + currentOfflineDuration
+            const graceRemaining = Math.max(0, graceLimit - graceUsed)
+
+            // Update offline duration if offline
+            if (!isOnline && graceRemaining > 0) {
+                setCurrentOfflineDuration(d => d + 1)
+            }
+
             setTimeLeft(prev => {
                 const newTime = prev - 1
+
+                // ⏸️ Pause main timer if offline with grace remaining
+                if (!isOnline && graceRemaining > 0) {
+                    return prev // Don't decrement - paused!
+                }
+
+                // ⏰ Otherwise count down normally
                 if (newTime <= 0) {
                     if (timerIntervalRef.current) {
                         clearInterval(timerIntervalRef.current)
@@ -768,7 +941,7 @@ export default function StudentExamPage() {
                 timerIntervalRef.current = null
             }
         }
-    }, [phase, exitWarningActive, timeLeft])
+    }, [phase, exitWarningActive, timeLeft, isOnline, totalOfflineSeconds, currentOfflineDuration, exam])
 
     // Time expiration - with proper offline handling  
     useEffect(() => {
@@ -869,7 +1042,7 @@ export default function StudentExamPage() {
             if (attemptId) {
                 supabase.from('student_attempts').update({
                     last_activity: new Date().toISOString(),
-                    time_remaining_seconds: timeLeft
+                    time_remaining_seconds: timeLeftRef.current // Use ref instead of state!
                 }).eq('id', attemptId)
             }
             return 'Are you sure you want to leave? Your exam progress will be lost.'
@@ -877,16 +1050,36 @@ export default function StudentExamPage() {
 
         window.addEventListener('beforeunload', handleBeforeUnload)
         return () => window.removeEventListener('beforeunload', handleBeforeUnload)
-    }, [phase, attemptId, timeLeft])
+    }, [phase, attemptId]) // Removed timeLeft from dependencies
 
     // Network status - with auto-submit on reconnection
     useEffect(() => {
-        const handleOnline = () => {
+        const handleOnline = async () => {
             setIsOnline(true)
 
-            // If time expired while offline,submit now
+            // Call offline API to calculate duration server-side
+            if (attemptId && phase === 'exam') {
+                try {
+                    const res = await fetch(`/api/exam/${params.id}/offline`, {
+                        method: 'DELETE',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ attemptId })
+                    })
+
+                    const data = await res.json()
+                    if (data.success) {
+                        setTotalOfflineSeconds(data.totalOffline || 0)
+                        setCurrentOfflineDuration(0) // Reset current duration
+                        // console.log(`[Offline] Reconnected. Added ${data.offlineAdded}s, total: ${data.totalOffline}s`)
+                    }
+                } catch (error) {
+                    // console.error('[Offline] Error calling reconnect API:', error)
+                }
+            }
+
+            // If time expired while offline, submit now
             if (phase === 'exam' && timeLeft === 0 && hasAttemptedSubmit && !isSubmitting && submitExamRef.current) {
-                console.log('[Auto-Submit] Back online after time expired - submitting now')
+                // console.log('[Auto-Submit] Back online after time expired - submitting now')
                 toast('Back online! Submitting exam...', {
                     icon: 'ℹ️',
                     duration: 3000
@@ -896,8 +1089,23 @@ export default function StudentExamPage() {
             }
         }
 
-        const handleOffline = () => {
+        const handleOffline = async () => {
             setIsOnline(false)
+
+            // Call offline API to mark as offline (server sets timestamp)
+            if (attemptId && phase === 'exam') {
+                try {
+                    await fetch(`/api/exam/${params.id}/offline`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ attemptId })
+                    })
+                    // console.log('[Offline] Marked as offline in database')
+                } catch (error) {
+                    // console.error('[Offline] Error calling offline API:', error)
+                }
+            }
+
             if (phase === 'exam') {
                 toast('You are offline. Your answers are saved locally.', {
                     icon: '⚠️',
@@ -914,7 +1122,42 @@ export default function StudentExamPage() {
             window.removeEventListener('online', handleOnline)
             window.removeEventListener('offline', handleOffline)
         }
-    }, [phase, timeLeft, hasAttemptedSubmit, isSubmitting]) // Added dependencies to fix closure issue
+    }, [phase, timeLeft, hasAttemptedSubmit, isSubmitting, attemptId]) // Added dependencies to fix closure issue
+
+    // Load offline state from database on exam start/resume
+    useEffect(() => {
+        const loadOfflineState = async () => {
+            if (!attemptId || phase !== 'exam') return
+
+            try {
+                const { data } = await supabase
+                    .from('student_attempts')
+                    .select('total_offline_seconds, went_offline_at')
+                    .eq('id', attemptId)
+                    .single()
+
+                if (data) {
+                    setTotalOfflineSeconds(data.total_offline_seconds || 0)
+
+                    // 🔒 Safety: If was offline before refresh, calculate current duration
+                    if (data.went_offline_at && !navigator.onLine) {
+                        const elapsed = Math.floor(
+                            (Date.now() - new Date(data.went_offline_at).getTime()) / 1000
+                        )
+                        setCurrentOfflineDuration(elapsed)
+                        // console.log('[Offline] Restored offline state after refresh:', {
+                        //     total: data.total_offline_seconds,
+                        //     current: elapsed
+                        // })
+                    }
+                }
+            } catch (error) {
+                // console.error('[Offline] Error loading offline state:', error)
+            }
+        }
+
+        loadOfflineState()
+    }, [attemptId, phase])
 
     // Prevent tab switching / window blur during exam
     useEffect(() => {
@@ -936,18 +1179,23 @@ export default function StudentExamPage() {
     useEffect(() => {
         if (phase !== 'exam') return
 
-        let blurCount = 0
         const handleBlur = () => {
             if (phase === 'exam') {
-                blurCount++
-                console.warn(`Window blur detected (count: ${blurCount})`)
+                blurCountRef.current++ // Use ref to persist across re-renders
+                // console.warn(`Window blur detected (count: ${blurCountRef.current})`)
 
                 // Update DB with blur/switch count
                 if (attemptId) {
                     supabase.from('student_attempts').update({
-                        window_switches: blurCount,
+                        window_switches: blurCountRef.current,
                         last_activity: new Date().toISOString()
-                    }).eq('id', attemptId)
+                    }).eq('id', attemptId).then(({ data, error }) => {
+                        if (error) {
+                            // console.error('Failed to update window_switches:', error)
+                        } else {
+                            // console.log('✅ Window switches updated successfully:', blurCountRef.current)
+                        }
+                    })
                 }
 
                 toast.error(`⚠️ Focus lost detected! Keep focus on exam window.`, {
@@ -1053,6 +1301,14 @@ export default function StudentExamPage() {
                             <span className="text-gray-600">Exits Used</span>
                             <span className="text-gray-900 font-medium">{resumeAttempt.exit_count || 0} / {examData.max_exits}</span>
                         </div>
+                        {resumeAttempt.total_offline_seconds > 0 && (
+                            <div className="flex justify-between text-sm">
+                                <span className="text-gray-600">Offline Grace Used</span>
+                                <span className="text-gray-900 font-medium">
+                                    {Math.floor(resumeAttempt.total_offline_seconds / 60)}m {resumeAttempt.total_offline_seconds % 60}s / {examData.offline_grace_minutes}m
+                                </span>
+                            </div>
+                        )}
                     </div>
 
                     <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-6">
@@ -1122,7 +1378,7 @@ export default function StudentExamPage() {
 
                             <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-6">
                                 <p className="text-xs text-yellow-800">
-                                    <strong>Rules:</strong> Fullscreen required • 10s to return if you exit • Disconnections allowed within 15min
+                                    <strong>Rules:</strong> Fullscreen required • {examData.exit_warning_seconds || 10}s to return if you exit • Disconnections allowed within {examData.offline_grace_minutes || 10}min
                                 </p>
                             </div>
 
@@ -1182,7 +1438,7 @@ export default function StudentExamPage() {
 
                             <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-6">
                                 <p className="text-xs text-yellow-800">
-                                    <strong>Rules:</strong> Fullscreen required • 10s to return if you exit • Max {examData.max_exits} exits • Can resume within 15min if disconnected • No refresh/close
+                                    <strong>Rules:</strong> Fullscreen required • {examData.exit_warning_seconds}s to return if you exit • Max {examData.max_exits} exits • Can resume within {examData.offline_grace_minutes}min if disconnected • No refresh/close
                                 </p>
                             </div>
 
@@ -1323,34 +1579,101 @@ export default function StudentExamPage() {
 
     return (
         <div className="min-h-screen bg-gray-50">
-            {/* Offline Modal */}
-            {!isOnline && (
-                <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-gray-900/90 backdrop-blur-md">
-                    <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-md w-full">
-                        <div className="text-center">
-                            <div className="w-24 h-24 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-6">
-                                <WifiOff className="w-12 h-12 text-red-600 animate-pulse" />
-                            </div>
-                            <h2 className="text-2xl font-bold text-gray-900 mb-2">Connection Lost</h2>
-                            <p className="text-gray-600 mb-6">
-                                Your internet connection has been lost.
-                                <br />
-                                <span className="font-semibold text-red-600">Do not close or refresh this page.</span>
-                            </p>
-                            <div className="p-4 bg-yellow-50 rounded-xl mb-4 text-sm text-yellow-800 text-left">
-                                <ul className="list-disc pl-4 space-y-1">
-                                    <li>Your answers are saved locally</li>
-                                    <li>Will resume when connection is restored</li>
-                                    <li>You have 15 minutes to reconnect, or until the exam timer ends.</li>
-                                </ul>
-                            </div>
-                            <div className="text-sm text-gray-500">
-                                Time remaining: {formatTime(timeLeft)}
+            {/* Offline Grace Period Modal */}
+            {!isOnline && exam && (() => {
+                const graceLimit = (exam.offline_grace_minutes || 10) * 60
+                const graceUsed = totalOfflineSeconds + currentOfflineDuration
+                const graceRemaining = Math.max(0, graceLimit - graceUsed)
+                const gracePercent = (graceRemaining / graceLimit) * 100
+
+                return (
+                    <div className="fixed inset-0 z-40 flex items-center justify-center p-4 bg-black/60 backdrop-blur-md">
+                        <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-md w-full">
+                            <div className="text-center">
+                                {graceRemaining > 0 ? (
+                                    <>
+                                        <div className="mb-4">
+                                            <div className="inline-flex items-center justify-center w-16 h-16 bg-orange-100 rounded-full mb-4">
+                                                <span className="text-3xl">⏸️</span>
+                                            </div>
+                                        </div>
+
+                                        <h3 className="text-2xl font-bold text-gray-900 mb-2">
+                                            Connection Lost
+                                        </h3>
+
+                                        <p className="text-gray-600 mb-6">
+                                            Main exam timer is <span className="font-semibold text-orange-600">paused</span>
+                                        </p>
+
+                                        {/* Grace Remaining Time */}
+                                        <div className="mb-4">
+                                            <div className="text-sm text-gray-500 mb-2">Grace time remaining:</div>
+                                            <div className="text-4xl font-bold text-orange-600">
+                                                {formatTime(graceRemaining)}
+                                            </div>
+                                        </div>
+
+                                        {/* Progress Bar */}
+                                        <div className="w-full bg-gray-200 rounded-full h-4 mb-6 overflow-hidden">
+                                            <div
+                                                className="bg-gradient-to-r from-orange-500 to-orange-600 h-4 rounded-full transition-all duration-1000 ease-linear"
+                                                style={{ width: `${gracePercent}%` }}
+                                            />
+                                        </div>
+
+                                        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-sm text-blue-800">
+                                            <ul className="text-left space-y-2">
+                                                <li className="flex items-start">
+                                                    <span className="mr-2">✓</span>
+                                                    <span>Your answers are saved</span>
+                                                </li>
+                                                <li className="flex items-start">
+                                                    <span className="mr-2">✓</span>
+                                                    <span>Exam will resume when connection restored</span>
+                                                </li>
+                                                <li className="flex items-start">
+                                                    <span className="mr-2">⏱️</span>
+                                                    <span>Main timer paused: <strong>{formatTime(timeLeft)}</strong></span>
+                                                </li>
+                                            </ul>
+                                        </div>
+                                    </>
+                                ) : (
+                                    <>
+                                        <div className="mb-4">
+                                            <div className="inline-flex items-center justify-center w-16 h-16 bg-red-100 rounded-full mb-4">
+                                                <span className="text-3xl">⏰</span>
+                                            </div>
+                                        </div>
+
+                                        <h3 className="text-2xl font-bold text-gray-900 mb-2">
+                                            Grace Period Exhausted
+                                        </h3>
+
+                                        <p className="text-gray-600 mb-4">
+                                            You've been offline for too long
+                                        </p>
+
+                                        {/* Main Timer Running */}
+                                        <div className="mb-4">
+                                            <div className="text-sm text-red-600 mb-2">Main timer is now running:</div>
+                                            <div className="text-4xl font-bold text-red-600">
+                                                {formatTime(timeLeft)}
+                                            </div>
+                                        </div>
+
+                                        <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-sm text-red-800">
+                                            <p className="font-semibold mb-2">Please reconnect to submit your exam</p>
+                                            <p>Your answers are safe, but the exam timer is now counting down.</p>
+                                        </div>
+                                    </>
+                                )}
                             </div>
                         </div>
                     </div>
-                </div>
-            )}
+                )
+            })()}
 
             {/* Submit Modal */}
             {showSubmitModal && (

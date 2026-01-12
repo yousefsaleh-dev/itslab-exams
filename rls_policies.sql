@@ -82,22 +82,8 @@ ON options FOR SELECT
 TO authenticated, anon
 USING (true);
 
--- Allow INSERT/UPDATE/DELETE for admins (needed when creating/editing exams)
-CREATE POLICY "Admins can insert options"
-ON options FOR INSERT
-TO authenticated, anon
-WITH CHECK (true);
-
-CREATE POLICY "Admins can update options"
-ON options FOR UPDATE
-TO authenticated, anon
-USING (true)
-WITH CHECK (true);
-
-CREATE POLICY "Admins can delete options"
-ON options FOR DELETE
-TO authenticated, anon
-USING (true);
+-- ⚠️ SECURITY: Write operations on options should ONLY happen via service_role from API
+-- NO policies for INSERT/UPDATE/DELETE - forces use of API routes with proper validation
 
 -- STUDENT ATTEMPTS
 CREATE POLICY "Read own attempts"
@@ -160,19 +146,17 @@ ON exams FOR SELECT
 TO anon
 USING (true);
 
--- Admins can do EVERYTHING (INSERT/UPDATE/DELETE)
--- These will be used by admin pages (they use service_role via API or direct supabase client)
-CREATE POLICY "Admins manage questions"
-ON questions FOR ALL
-TO authenticated, anon
-USING (true)
-WITH CHECK (true);
-
-CREATE POLICY "Admins manage exams"
-ON exams FOR ALL
-TO authenticated, anon
-USING (true)
-WITH CHECK (true);
+-- ⚠️ SECURITY FIX: Removed dangerous policies that allowed anon users to modify exams/questions
+-- All write operations (INSERT/UPDATE/DELETE) MUST go through service_role from API endpoints
+-- This prevents:
+-- 1. Anonymous users from creating/editing/deleting exams
+-- 2. Anonymous users from modifying questions
+-- 3. Students from tampering with exam data
+-- 
+-- Admin operations are handled server-side via:
+-- - /api/exam/[id]/details (uses service_role)
+-- - /api/exam/clone (uses service_role)
+-- - ExamForm component (uses service_role via supabase client)
 
 -- ========================================
 -- VERIFICATION

@@ -42,9 +42,11 @@ export async function POST(
         exam_id,
         started_at,
         completed,
+        total_offline_seconds,
         exam:exams (
           duration_minutes,
-          is_active
+          is_active,
+          offline_grace_minutes
         )
       `)
             .eq('id', body.attemptId)
@@ -75,21 +77,24 @@ export async function POST(
             )
         }
 
-        // 2. SERVER-SIDE TIME VALIDATION
+        // 2. SERVER-SIDE TIME VALIDATION (with offline grace period support)
         const startTime = new Date(attempt.started_at).getTime()
         const elapsedMs = Date.now() - startTime
         const elapsedSeconds = Math.floor(elapsedMs / 1000)
         const allowedSeconds = examData.duration_minutes * 60
 
-        // Grace period: 60 seconds to account for network issues, offline submissions, etc.
-        // This is reasonable because:
-        // - Student might be offline when time expires
-        // - Network reconnection takes time
-        // - Auto-submit retry delays
-        const gracePeriodSeconds = 60
+        // ✅ Offline grace period handling
+        // Subtract grace time used (capped at limit) from elapsed time
+        const graceLimit = (examData.offline_grace_minutes || 10) * 60
+        const graceUsed = Math.min(attempt.total_offline_seconds || 0, graceLimit)
+        const actualElapsed = elapsedSeconds - graceUsed
 
-        if (elapsedSeconds > allowedSeconds + gracePeriodSeconds) {
-            console.log(`[Submit] Time limit exceeded: ${elapsedSeconds}s > ${allowedSeconds + gracePeriodSeconds}s`)
+        // Grace period: 60 seconds to account for network submission delays
+        const submitGracePeriod = 60
+
+        if (actualElapsed > allowedSeconds + submitGracePeriod) {
+            // console.log(`[Submit] Time limit exceeded: ${actualElapsed}s > ${allowedSeconds + submitGracePeriod}s`)
+            // console.log(`[Submit] Breakdown: elapsed=${elapsedSeconds}s, graceUsed=${graceUsed}s, actualElapsed=${actualElapsed}s`)
             return NextResponse.json(
                 {
                     error: 'Time limit exceeded. Your exam has been auto-submitted by the system.',
@@ -130,6 +135,21 @@ export async function POST(
                     attempt_id: body.attemptId,
                     question_id: question.id,
                     selected_option_id: null,
+                    is_correct: false
+                })
+                continue
+            }
+
+            // SECURITY: Validate that the selected option belongs to this question
+            const optionBelongsToQuestion = question.options.some((opt: any) => opt.id === studentSelectedId)
+
+            if (!optionBelongsToQuestion) {
+                // Student tried to submit an option from a different question - mark as wrong
+                // console.warn(`Invalid option ${studentSelectedId} for question ${question.id}`)
+                validatedAnswers.push({
+                    attempt_id: body.attemptId,
+                    question_id: question.id,
+                    selected_option_id: null, // Don't save invalid option
                     is_correct: false
                 })
                 continue
@@ -179,7 +199,8 @@ export async function POST(
                 score: finalScore,
                 total_points: totalPoints,
                 time_spent_seconds: elapsedSeconds,
-                completed_at: new Date().toISOString()
+                completed_at: new Date().toISOString(),
+                went_offline_at: null // Cleanup orphaned offline state
             })
             .eq('id', body.attemptId)
 

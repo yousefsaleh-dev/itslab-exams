@@ -24,8 +24,8 @@ export default function EditExamPage() {
 
     const fetchExamData = async () => {
         try {
-            // Use API route to bypass RLS (service_role key)
-            const response = await fetch(`/api/exam/${params.id}/details`)
+            // Use API route to bypass RLS (service_role key) - include adminId for auth
+            const response = await fetch(`/api/exam/${params.id}/details?adminId=${admin?.id}`)
 
             if (!response.ok) {
                 throw new Error('Failed to fetch exam data')

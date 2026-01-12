@@ -40,6 +40,12 @@ export default function ExamForm({ initialData, isEditing = false }: ExamFormPro
     const [shuffleOptions, setShuffleOptions] = useState(initialData?.exam?.shuffle_options ?? true)
     const [showResults, setShowResults] = useState(initialData?.exam?.show_results ?? true)
     const [maxExits, setMaxExits] = useState(initialData?.exam?.max_exits || 3)
+    const [offlineGraceMinutes, setOfflineGraceMinutes] = useState(initialData?.exam?.offline_grace_minutes || 10)
+    const [exitWarningSeconds, setExitWarningSeconds] = useState(initialData?.exam?.exit_warning_seconds || 10)
+
+    // Access code
+    const [requiresAccessCode, setRequiresAccessCode] = useState(initialData?.exam?.requires_access_code || false)
+    const [accessCode, setAccessCode] = useState(initialData?.exam?.access_code || '')
 
     // Questions
     const [questions, setQuestions] = useState<Question[]>(initialData?.questions || [])
@@ -224,164 +230,63 @@ Additional requirements:
 
         setSaving(true)
         try {
-            let examId = initialData?.exam?.id
+            const examId = initialData?.exam?.id
 
-            if (isEditing && examId) {
-                // SECURITY CHECK: Prevent question edits if students completed this exam
-                const { data: completedAttempts, error: checkError } = await supabase
-                    .from('student_attempts')
-                    .select('id')
-                    .eq('exam_id', examId)
-                    .eq('completed', true)
-                    .limit(1)
-
-                if (checkError) throw checkError
-
-                // UPDATE EXAM SETTINGS (always safe to update)
-                const { error: examError } = await supabase
-                    .from('exams')
-                    .update({
-                        title,
-                        description,
-                        duration_minutes: duration,
-                        pass_score: passScore,
-                        shuffle_questions: shuffleQuestions,
-                        shuffle_options: shuffleOptions,
-                        show_results: showResults,
-                        max_exits: maxExits,
-                    })
-                    .eq('id', examId)
-
-                if (examError) throw examError
-
-                // CHECK: If exam has completed attempts, only allow settings update
-                if (completedAttempts && completedAttempts.length > 0) {
-                    toast.success('Exam settings updated! ⚠️ Questions are locked (students have completed this exam)')
-                    router.push('/admin/dashboard')
-                    router.refresh()
-                    return
-                }
-
-                // Safe to update questions - no completed attempts yet
-                // Strategy: Delete all questions/options, then re-insert (prevents duplication)
-
-                // Step 1: Get all existing question IDs
-                const { data: existingQuestions } = await supabase
-                    .from('questions')
-                    .select('id')
-                    .eq('exam_id', examId)
-
-                // Step 2: Delete existing questions and options
-                if (existingQuestions && existingQuestions.length > 0) {
-                    const questionIds = existingQuestions.map(q => q.id)
-
-                    // Delete options first (avoid FK issues)
-                    await supabase
-                        .from('options')
-                        .delete()
-                        .in('question_id', questionIds)
-
-                    // Delete questions
-                    await supabase
-                        .from('questions')
-                        .delete()
-                        .eq('exam_id', examId)
-                }
-
-                // Step 3: Insert all current questions fresh
-                for (let i = 0; i < questions.length; i++) {
-                    const q = questions[i]
-
-                    const { data: questionData, error: questionError } = await supabase
-                        .from('questions')
-                        .insert([{
-                            exam_id: examId,
-                            question_text: q.question_text,
-                            question_order: i,
-                            points: q.points
-                        }])
-                        .select()
-                        .single()
-
-                    if (questionError) throw questionError
-
-                    // Insert options
-                    const optionsToInsert = q.options.map((opt, optIdx) => ({
-                        question_id: questionData.id,
-                        option_text: opt.option_text,
-                        is_correct: opt.is_correct,
-                        option_order: optIdx
+            // Prepare request body
+            const requestBody = {
+                adminId: admin.id,
+                title,
+                description,
+                duration_minutes: duration,
+                pass_score: passScore,
+                shuffle_questions: shuffleQuestions,
+                shuffle_options: shuffleOptions,
+                show_results: showResults,
+                max_exits: maxExits,
+                offline_grace_minutes: offlineGraceMinutes,
+                exit_warning_seconds: exitWarningSeconds,
+                requires_access_code: requiresAccessCode,
+                access_code: requiresAccessCode ? accessCode : null,
+                questions: questions.map(q => ({
+                    question_text: q.question_text,
+                    points: q.points,
+                    options: q.options.map(o => ({
+                        option_text: o.option_text,
+                        is_correct: o.is_correct
                     }))
+                }))
+            }
 
-                    const { error: optionsError } = await supabase
-                        .from('options')
-                        .insert(optionsToInsert)
+            // Call appropriate API endpoint
+            const endpoint = isEditing && examId
+                ? `/api/admin/exam/update/${examId}`
+                : '/api/admin/exam/create'
 
-                    if (optionsError) throw optionsError
-                }
+            const response = await fetch(endpoint, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(requestBody)
+            })
 
-                toast.success('Exam updated successfully!')
+            const data = await response.json()
+
+            if (!response.ok) {
+                throw new Error(data.error || 'Failed to save exam')
+            }
+
+            if (data.settingsOnly) {
+                toast.success('Exam settings updated! ⚠️ Questions are locked (students have completed this exam)')
             } else {
-                // CREATE EXAM
-                const { data: examData, error: examError } = await supabase
-                    .from('exams')
-                    .insert([{
-                        admin_id: admin.id,
-                        title,
-                        description,
-                        duration_minutes: duration,
-                        pass_score: passScore,
-                        shuffle_questions: shuffleQuestions,
-                        shuffle_options: shuffleOptions,
-                        show_results: showResults,
-                        max_exits: maxExits,
-                        is_active: true
-                    }])
-                    .select()
-                    .single()
-
-                if (examError) throw examError
-                examId = examData.id
-
-                // Insert questions
-                for (let i = 0; i < questions.length; i++) {
-                    const q = questions[i]
-
-                    const { data: questionData, error: questionError } = await supabase
-                        .from('questions')
-                        .insert([{
-                            exam_id: examId,
-                            question_text: q.question_text,
-                            question_order: i,
-                            points: q.points
-                        }])
-                        .select()
-                        .single()
-
-                    if (questionError) throw questionError
-
-                    // Insert options
-                    const optionsToInsert = q.options.map((opt, optIdx) => ({
-                        question_id: questionData.id,
-                        option_text: opt.option_text,
-                        is_correct: opt.is_correct,
-                        option_order: optIdx
-                    }))
-
-                    const { error: optionsError } = await supabase
-                        .from('options')
-                        .insert(optionsToInsert)
-
-                    if (optionsError) throw optionsError
-                }
-                toast.success('Exam created successfully!')
+                toast.success(isEditing ? 'Exam updated successfully!' : 'Exam created successfully!')
             }
 
             router.push('/admin/dashboard')
             router.refresh()
-        } catch (error) {
-            // console.error(error)
-            toast.error(isEditing ? 'Failed to update exam' : 'Failed to save exam')
+        } catch (error: any) {
+            console.error('Save exam error:', error)
+            toast.error(error.message || (isEditing ? 'Failed to update exam' : 'Failed to save exam'))
         } finally {
             setSaving(false)
         }
@@ -491,6 +396,43 @@ Additional requirements:
                             />
                         </div>
 
+                        <div>
+                            <label className="flex items-center gap-2 text-sm font-medium text-gray-700 mb-2">
+                                <Clock className="w-4 h-4 text-orange-600" />
+                                Offline Grace (min)
+                            </label>
+                            <input
+                                type="number"
+                                value={offlineGraceMinutes}
+                                onChange={(e) => setOfflineGraceMinutes(Number(e.target.value))}
+                                min="0"
+                                max="60"
+                                className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-transparent transition-all duration-200 hover:border-gray-400"
+                            />
+                            <p className="text-xs text-gray-500 mt-1">Timer pauses when offline</p>
+                        </div>
+
+                        <div>
+                            <label className="flex items-center gap-2 text-sm font-medium text-gray-700 mb-2">
+                                <Clock className="w-4 h-4 text-red-600" />
+                                Exit Warning (sec)
+                            </label>
+                            <input
+                                type="number"
+                                value={exitWarningSeconds}
+                                onChange={(e) => setExitWarningSeconds(Number(e.target.value))}
+                                min="5"
+                                max="60"
+                                className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-red-500 focus:border-transparent transition-all duration-200 hover:border-gray-400"
+                            />
+                            <p className="text-xs text-gray-500 mt-1">Countdown before failing</p>
+                            {exitWarningSeconds > duration * 60 && (
+                                <p className="text-xs text-red-600 mt-1 font-medium">
+                                    ⚠️ Warning duration exceeds exam duration
+                                </p>
+                            )}
+                        </div>
+
                         <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
                             <input
                                 type="checkbox"
@@ -532,6 +474,34 @@ Additional requirements:
                             <Eye className="w-4 h-4 text-green-600" />
                             Show Results to Students
                         </label>
+                    </div>
+
+                    {/* Access Code */}
+                    <div>
+                        <div className="flex items-center gap-2 mb-2">
+                            <input
+                                type="checkbox"
+                                id="requiresAccessCode"
+                                checked={requiresAccessCode}
+                                onChange={(e) => setRequiresAccessCode(e.target.checked)}
+                                className="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500"
+                            />
+                            <label htmlFor="requiresAccessCode" className="text-sm font-medium text-gray-700">
+                                Require Access Code
+                            </label>
+                        </div>
+                        {requiresAccessCode && (
+                            <input
+                                type="text"
+                                value={accessCode}
+                                onChange={(e) => setAccessCode(e.target.value)}
+                                placeholder="Enter access code"
+                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                            />
+                        )}
+                        <p className="text-xs text-gray-500 mt-1">
+                            Students will need to enter this code to start the exam
+                        </p>
                     </div>
                 </div>
 
@@ -735,7 +705,7 @@ Additional requirements:
                     <button
                         onClick={saveExam}
                         disabled={saving}
-                        className="flex items-center gap-2 px-8 py-3 bg-gray-900 text-white rounded-lg hover:bg-gray-800 transition-colors font-semibold disabled:opacity-50 shadow-md"
+                        className="flex items-center gap-2 px-8 py-3 bg-gray-900 text-white rounded-lg hover:bg-gray-800 transition-colors font-semibold disabled:opacity-50 disabled:cursor-not-allowed shadow-md"
                     >
                         {saving ? (
                             <>

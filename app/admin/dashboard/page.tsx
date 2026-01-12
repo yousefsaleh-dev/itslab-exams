@@ -47,20 +47,26 @@ export default function AdminDashboard() {
     }
 
     const deleteExam = async (examId: string) => {
-        if (!confirm('Are you sure you want to delete this exam?')) return
+        if (!confirm('Are you sure you want to delete this exam? This action cannot be undone.')) return
 
         try {
-            const { error } = await supabase
-                .from('exams')
-                .delete()
-                .eq('id', examId)
+            // Use secure API endpoint with admin authentication
+            const response = await fetch('/api/admin/exam/delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ examId, adminId: admin?.id })
+            })
 
-            if (error) throw error
+            const data = await response.json()
+
+            if (!response.ok) {
+                throw new Error(data.error || 'Failed to delete exam')
+            }
 
             setExams(exams.filter(e => e.id !== examId))
             toast.success('Exam deleted successfully')
-        } catch (error) {
-            toast.error('Failed to delete exam')
+        } catch (error: any) {
+            toast.error(error.message || 'Failed to delete exam')
         }
     }
 
@@ -72,70 +78,25 @@ export default function AdminDashboard() {
 
     const cloneExam = async (examId: string) => {
         if (!confirm('Do you want to clone this exam?')) return
+
         try {
-            // 1. Fetch exam and questions in parallel (faster)
-            const [examResult, questionsResult] = await Promise.all([
-                supabase.from('exams').select('*').eq('id', examId).single(),
-                supabase.from('questions').select('*, options(*)').eq('exam_id', examId)
-            ])
-
-            if (examResult.error) throw examResult.error
-            if (questionsResult.error) throw questionsResult.error
-
-            const examData = examResult.data
-            const questionsData = questionsResult.data
-
-            // 2. Create new exam (exclude system fields)
-            const { id, created_at, ...examDataToClone } = examData
-
-            const { data: newExam, error: newExamError } = await supabase
-                .from('exams')
-                .insert([{
-                    ...examDataToClone,
-                    title: `Copy of ${examData.title}`,
-                    is_active: false // Default to inactive
-                }])
-                .select()
-                .single()
-            if (newExamError) throw newExamError
-
-            // 3. Batch insert all questions at once
-            const questionsToInsert = questionsData.map((q, idx) => ({
-                exam_id: newExam.id,
-                question_text: q.question_text,
-                question_order: q.question_order,
-                points: q.points
-            }))
-
-            const { data: newQuestions, error: questionsInsertError } = await supabase
-                .from('questions')
-                .insert(questionsToInsert)
-                .select()
-
-            if (questionsInsertError) throw questionsInsertError
-
-            // 4. Batch insert all options at once
-            const allOptions = newQuestions.flatMap((newQ, idx) => {
-                const originalQuestion = questionsData[idx]
-                return originalQuestion.options.map((o: any) => ({
-                    question_id: newQ.id,
-                    option_text: o.option_text,
-                    is_correct: o.is_correct,
-                    option_order: o.option_order
-                }))
+            // Use secure API endpoint with admin authentication
+            const response = await fetch('/api/exam/clone', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ examId, adminId: admin?.id })
             })
 
-            const { error: optionsInsertError } = await supabase
-                .from('options')
-                .insert(allOptions)
+            const data = await response.json()
 
-            if (optionsInsertError) throw optionsInsertError
+            if (!response.ok) {
+                throw new Error(data.error || 'Failed to clone exam')
+            }
 
-            toast.success(`Exam cloned successfully! (${newQuestions.length} questions)`)
+            toast.success(`Exam cloned successfully! (${data.questionCount} questions)`)
             fetchExams()
-        } catch (error) {
-            // console.error(error)
-            toast.error('Failed to clone exam')
+        } catch (error: any) {
+            toast.error(error.message || 'Failed to clone exam')
         }
     }
 

@@ -4,11 +4,12 @@ import { createClient } from '@supabase/supabase-js'
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
 
-export async function GET(
-    request: NextRequest,
-    { params }: { params: Promise<{ id: string }> }
-) {
-    // Use service role to bypass RLS (admins need to see options!)
+interface DeleteExamRequest {
+    examId: string
+    adminId: string
+}
+
+export async function POST(request: NextRequest) {
     const supabase = createClient(supabaseUrl, supabaseServiceKey, {
         auth: {
             autoRefreshToken: false,
@@ -17,13 +18,17 @@ export async function GET(
     })
 
     try {
-        // Next.js 15+ requires awaiting params
-        const { id: examId } = await params
+        const body: DeleteExamRequest = await request.json()
+        const { examId, adminId } = body
 
-        // SECURITY: Extract and validate admin ID from query params
-        const { searchParams } = new URL(request.url)
-        const adminId = searchParams.get('adminId')
+        if (!examId) {
+            return NextResponse.json(
+                { error: 'Exam ID required' },
+                { status: 400 }
+            )
+        }
 
+        // SECURITY: Require admin authentication
         if (!adminId) {
             return NextResponse.json(
                 { error: 'Admin authentication required' },
@@ -45,14 +50,14 @@ export async function GET(
             )
         }
 
-        // Fetch Exam
-        const { data: examData, error: examError } = await supabase
+        // Fetch exam to verify ownership
+        const { data: exam, error: examError } = await supabase
             .from('exams')
-            .select('*')
+            .select('id, admin_id, title')
             .eq('id', examId)
             .single()
 
-        if (examError) {
+        if (examError || !exam) {
             return NextResponse.json(
                 { error: 'Exam not found' },
                 { status: 404 }
@@ -60,38 +65,34 @@ export async function GET(
         }
 
         // SECURITY: Verify admin owns this exam
-        if (examData.admin_id !== adminId) {
+        if (exam.admin_id !== adminId) {
             return NextResponse.json(
-                { error: 'You do not have permission to view this exam' },
+                { error: 'You do not have permission to delete this exam' },
                 { status: 403 }
             )
         }
 
-        // Fetch Questions with Options (RLS bypass with service_role!)
-        const { data: questionsData, error: questionsError } = await supabase
-            .from('questions')
-            .select(`
-        *,
-        options (*)
-      `)
-            .eq('exam_id', examId)
-            .order('question_order')
+        // Delete exam (cascade deletes questions, options, attempts, answers via DB constraints)
+        const { error: deleteError } = await supabase
+            .from('exams')
+            .delete()
+            .eq('id', examId)
 
-        if (questionsError) {
+        if (deleteError) {
+            console.error('Delete exam error:', deleteError)
             return NextResponse.json(
-                { error: 'Failed to load questions' },
+                { error: 'Failed to delete exam' },
                 { status: 500 }
             )
         }
 
         return NextResponse.json({
             success: true,
-            exam: examData,
-            questions: questionsData || []
+            message: `Exam "${exam.title}" deleted successfully`
         })
 
     } catch (error) {
-        // console.error('Get exam API error:', error)
+        console.error('Delete exam error:', error)
         return NextResponse.json(
             { error: 'Internal server error' },
             { status: 500 }

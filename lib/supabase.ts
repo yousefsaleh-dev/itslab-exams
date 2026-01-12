@@ -17,7 +17,7 @@ export interface Exam {
     id: string
     admin_id: string
     title: string
-    description: string | null
+    description: string
     duration_minutes: number
     pass_score: number
     shuffle_questions: boolean
@@ -25,6 +25,10 @@ export interface Exam {
     show_results: boolean
     max_exits: number
     is_active: boolean
+    offline_grace_minutes: number
+    exit_warning_seconds: number
+    requires_access_code: boolean
+    access_code: string | null
     created_at: string
 }
 
@@ -65,6 +69,9 @@ export interface StudentAttempt {
     auto_submit_reason: string | null
     recovery_count: number
     last_recovery_at: string | null
+    // Offline grace period fields
+    total_offline_seconds: number
+    went_offline_at: string | null
 }
 
 export interface StudentAnswer {

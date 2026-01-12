@@ -15,6 +15,8 @@ interface AttemptDetails {
     total_points: number | null
     time_spent_seconds: number | null
     exit_count: number
+    window_switches: number | null
+    suspicious_activities: any[]
     completed: boolean
     started_at: string
     completed_at: string | null
@@ -167,7 +169,7 @@ export default function AttemptDetailsPage() {
                         )}
                     </div>
 
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
                         <StatBox
                             icon={<Trophy className="w-5 h-5 text-gray-900" />}
                             label="Score"
@@ -188,8 +190,57 @@ export default function AttemptDetailsPage() {
                             label="Exits"
                             value={attempt.exit_count}
                         />
+                        <StatBox
+                            icon={<AlertTriangle className="w-5 h-5 text-orange-600" />}
+                            label="Switches"
+                            value={attempt.window_switches || 0}
+                        />
                     </div>
                 </div>
+
+                {/* Violations Timeline */}
+                {attempt.suspicious_activities && Array.isArray(attempt.suspicious_activities) && attempt.suspicious_activities.length > 0 && (
+                    <div className="bg-white rounded-xl border border-red-200 p-6 mb-6">
+                        <div className="flex items-center gap-2 mb-4">
+                            <AlertTriangle className="w-5 h-5 text-red-600" />
+                            <h2 className="text-xl font-semibold text-gray-900">Security Violations</h2>
+                            <span className="ml-auto px-3 py-1 bg-red-100 text-red-700 rounded-full text-sm font-semibold">
+                                {attempt.suspicious_activities.length} violations
+                            </span>
+                        </div>
+
+                        <div className="space-y-3 max-h-96 overflow-y-auto">
+                            {attempt.suspicious_activities.map((activity: any, idx: number) => (
+                                <div key={idx} className="flex items-start gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
+                                    <div className="flex-shrink-0 mt-0.5">
+                                        {activity.type === 'devtools_detected' && (
+                                            <div className="w-8 h-8 rounded-full bg-red-100 flex items-center justify-center">
+                                                <span className="text-sm">🛡️</span>
+                                            </div>
+                                        )}
+                                        {activity.type === 'copy_attempt' && (
+                                            <div className="w-8 h-8 rounded-full bg-orange-100 flex items-center justify-center">
+                                                <span className="text-sm">📋</span>
+                                            </div>
+                                        )}
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                        <div className="flex items-center gap-2">
+                                            <span className="font-semibold text-gray-900">
+                                                {activity.type === 'devtools_detected' ? 'DevTools Attempt' :
+                                                    activity.details?.includes('Right-click') ? 'Right-Click Attempt' : 'Copy Attempt'}
+                                            </span>
+                                            <span className="text-xs text-gray-500">
+                                                {new Date(activity.timestamp).toLocaleTimeString()}
+                                            </span>
+                                        </div>
+                                        <p className="text-sm text-gray-600 mt-0.5">{activity.details}</p>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
 
                 {/* Questions and Answers */}
                 <div className="space-y-6">

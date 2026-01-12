@@ -20,10 +20,10 @@ export async function GET(
         // Next.js 15+ requires awaiting params
         const { id: examId } = await params
 
-        // 1. Fetch exam details
+        // 1. Fetch exam details (include requires_access_code but NOT access_code)
         const { data: exam, error: examError } = await supabase
             .from('exams')
-            .select('id, title, description, duration_minutes, pass_score, shuffle_questions, shuffle_options, show_results, max_exits, is_active')
+            .select('id, title, description, duration_minutes, pass_score, shuffle_questions, shuffle_options, show_results, max_exits, offline_grace_minutes, exit_warning_seconds, is_active, requires_access_code')
             .eq('id', examId)
             .single()
 
@@ -67,8 +67,20 @@ export async function GET(
             )
         }
 
+        // 3. Return exam + questions (WITHOUT correct answers)
         return NextResponse.json({
-            exam,
+            exam: {
+                id: exam.id,
+                title: exam.title,
+                duration_minutes: exam.duration_minutes,
+                max_exits: exam.max_exits,
+                shuffle_questions: exam.shuffle_questions,
+                shuffle_options: exam.shuffle_options,
+                show_results: exam.show_results,
+                offline_grace_minutes: exam.offline_grace_minutes || 10, // Default 10 min
+                exit_warning_seconds: exam.exit_warning_seconds || 10, // Default 10 sec
+                requires_access_code: exam.requires_access_code || false
+            },
             questions
         })
 

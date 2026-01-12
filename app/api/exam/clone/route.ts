@@ -6,6 +6,7 @@ const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
 
 interface CloneExamRequest {
     examId: string
+    adminId: string  // Required for authentication
 }
 
 export async function POST(request: NextRequest) {
@@ -18,12 +19,34 @@ export async function POST(request: NextRequest) {
 
     try {
         const body: CloneExamRequest = await request.json()
-        const { examId } = body
+        const { examId, adminId } = body
 
         if (!examId) {
             return NextResponse.json(
                 { error: 'Exam ID required' },
                 { status: 400 }
+            )
+        }
+
+        // SECURITY: Require admin authentication
+        if (!adminId) {
+            return NextResponse.json(
+                { error: 'Admin authentication required' },
+                { status: 401 }
+            )
+        }
+
+        // Verify admin exists
+        const { data: admin, error: adminError } = await supabase
+            .from('admins')
+            .select('id')
+            .eq('id', adminId)
+            .single()
+
+        if (adminError || !admin) {
+            return NextResponse.json(
+                { error: 'Invalid admin credentials' },
+                { status: 401 }
             )
         }
 
@@ -40,6 +63,14 @@ export async function POST(request: NextRequest) {
             )
         }
 
+        // SECURITY: Verify admin owns this exam
+        if (examResult.data.admin_id !== adminId) {
+            return NextResponse.json(
+                { error: 'You do not have permission to clone this exam' },
+                { status: 403 }
+            )
+        }
+
         if (questionsResult.error) {
             return NextResponse.json(
                 { error: 'Failed to fetch questions' },
@@ -50,14 +81,14 @@ export async function POST(request: NextRequest) {
         const examData = examResult.data
         const questionsData = questionsResult.data || []
 
-        // Clone exam
-        const { admin_id, created_at, ...examDataToClone } = examData
+        // Clone exam - keep admin_id to maintain ownership
+        const { id, created_at, ...examDataToClone } = examData
         const { data: newExam, error: newExamError } = await supabase
             .from('exams')
             .insert([{
                 ...examDataToClone,
                 title: `Copy of ${examData.title}`,
-                is_active: false
+                is_active: false // Default to inactive
             }])
             .select()
             .single()
@@ -65,6 +96,14 @@ export async function POST(request: NextRequest) {
         if (newExamError) {
             return NextResponse.json(
                 { error: 'Failed to clone exam' },
+                { status: 500 }
+            )
+        }
+
+        // Defensive check: Ensure newExam.id is valid
+        if (!newExam?.id) {
+            return NextResponse.json(
+                { error: 'Failed to create exam - invalid ID' },
                 { status: 500 }
             )
         }
@@ -91,9 +130,18 @@ export async function POST(request: NextRequest) {
             )
         }
 
-        // Clone options
-        const allOptions = questionsData.flatMap((originalQuestion: any, idx: number) => {
-            const newQ = newQuestions[idx]
+        // Clone options - use question_order for reliable matching
+        // Create a map from question_order to new question ID
+        const newQuestionsMap = new Map(
+            newQuestions.map((q: any) => [q.question_order, q])
+        )
+
+        const allOptions = questionsData.flatMap((originalQuestion: any) => {
+            const newQ = newQuestionsMap.get(originalQuestion.question_order)
+            if (!newQ) {
+                // console.warn(`No matching question found for order ${originalQuestion.question_order}`)
+                return []
+            }
             return originalQuestion.options.map((o: any) => ({
                 question_id: newQ.id,
                 option_text: o.option_text,

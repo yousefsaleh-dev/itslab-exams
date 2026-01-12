@@ -29,8 +29,8 @@ export default function ExamDetailsPage() {
 
     const fetchExamDetails = async () => {
         try {
-            // Use API route to get full exam data (bypasses RLS)
-            const response = await fetch(`/api/exam/${params.id}/details`)
+            // Use API route to get full exam data (bypasses RLS) - include adminId for auth
+            const response = await fetch(`/api/exam/${params.id}/details?adminId=${admin?.id}`)
 
             if (!response.ok) {
                 throw new Error('Failed to fetch exam')
@@ -84,17 +84,23 @@ export default function ExamDetailsPage() {
         if (!exam) return
 
         try {
-            const { error } = await supabase
-                .from('exams')
-                .update({ is_active: !exam.is_active })
-                .eq('id', exam.id)
+            // Use secure API route with admin authentication
+            const response = await fetch('/api/admin/exam/toggle-status', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ examId: exam.id, adminId: admin?.id })
+            })
 
-            if (error) throw error
+            const data = await response.json()
 
-            setExam({ ...exam, is_active: !exam.is_active })
-            toast.success(`Exam ${exam.is_active ? 'deactivated' : 'activated'}`)
-        } catch (error) {
-            toast.error('Failed to update exam status')
+            if (!response.ok) {
+                throw new Error(data.error || 'Failed to update exam status')
+            }
+
+            setExam({ ...exam, is_active: data.is_active })
+            toast.success(data.message || `Exam ${exam.is_active ? 'deactivated' : 'activated'}`)
+        } catch (error: any) {
+            toast.error(error.message || 'Failed to update exam status')
         }
     }
 
@@ -165,17 +171,23 @@ export default function ExamDetailsPage() {
         if (!confirm('Are you sure you want to delete this attempt?')) return
 
         try {
-            const { error } = await supabase
-                .from('student_attempts')
-                .delete()
-                .eq('id', attemptId)
+            // Use secure API route with admin authentication
+            const response = await fetch('/api/admin/attempt/delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ attemptId, adminId: admin?.id })
+            })
 
-            if (error) throw error
+            const data = await response.json()
+
+            if (!response.ok) {
+                throw new Error(data.error || 'Failed to delete attempt')
+            }
 
             setAttempts(attempts.filter(a => a.id !== attemptId))
             toast.success('Attempt deleted')
-        } catch (error) {
-            toast.error('Failed to delete attempt')
+        } catch (error: any) {
+            toast.error(error.message || 'Failed to delete attempt')
         }
     }
 
@@ -198,6 +210,10 @@ export default function ExamDetailsPage() {
     const completedAttempts = attempts.filter(a => a.completed)
     const avgScore = completedAttempts.length > 0
         ? completedAttempts.reduce((sum, a) => sum + (a.score || 0), 0) / completedAttempts.length
+        : 0
+    const passedAttempts = completedAttempts.filter(a => a.score && a.score >= exam.pass_score)
+    const passRate = completedAttempts.length > 0
+        ? ((passedAttempts.length / completedAttempts.length) * 100)
         : 0
 
     // Analytics Calculations
@@ -278,7 +294,7 @@ export default function ExamDetailsPage() {
 
             <main className="max-w-7xl mx-auto px-4 py-8 sm:px-6 lg:px-8">
                 {/* Stats */}
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+                <div className="grid grid-cols-1 md:grid-cols-5 gap-6 mb-8">
                     <StatCard
                         icon={<Users className="w-8 h-8 text-gray-900" />}
                         title="Total Attempts"
@@ -288,6 +304,11 @@ export default function ExamDetailsPage() {
                         icon={<CheckCircle className="w-8 h-8 text-green-600" />}
                         title="Completed"
                         value={completedAttempts.length}
+                    />
+                    <StatCard
+                        icon={<CheckCircle className="w-8 h-8 text-blue-600" />}
+                        title="Pass Rate"
+                        value={`${passRate.toFixed(1)}%`}
                     />
                     <StatCard
                         icon={<Clock className="w-8 h-8 text-orange-600" />}
@@ -394,7 +415,10 @@ export default function ExamDetailsPage() {
                                                 Score
                                             </th>
                                             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                                Time Spent
+                                                Violations
+                                            </th>
+                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                                Time
                                             </th>
                                             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                                                 Exits
@@ -442,6 +466,45 @@ export default function ExamDetailsPage() {
                                                     ) : (
                                                         <span className="text-gray-400">-</span>
                                                     )}
+                                                </td>
+                                                {/* Violations Column */}
+                                                <td className="px-6 py-4">
+                                                    <div className="flex flex-wrap gap-1">
+                                                        {(() => {
+                                                            const activities = Array.isArray(attempt.suspicious_activities) ? attempt.suspicious_activities : []
+                                                            const devtoolsCount = activities.filter((a: any) => a.type === 'devtools_detected').length
+                                                            const copyCount = activities.filter((a: any) => a.type === 'copy_attempt').length
+                                                            const hasViolations = devtoolsCount > 0 || copyCount > 0 || (attempt.exit_count || 0) > exam.max_exits || (attempt.window_switches || 0) > 3
+
+                                                            return (
+                                                                <>
+                                                                    {devtoolsCount > 0 && (
+                                                                        <span className="px-2 py-1 text-xs font-semibold rounded-full bg-red-100 text-red-800" title={`DevTools detected ${devtoolsCount} times`}>
+                                                                            🛡️ DevTools {devtoolsCount > 1 && `(${devtoolsCount})`}
+                                                                        </span>
+                                                                    )}
+                                                                    {copyCount > 0 && (
+                                                                        <span className="px-2 py-1 text-xs font-semibold rounded-full bg-orange-100 text-orange-800" title={`${copyCount} copy attempts`}>
+                                                                            📋 Copy ({copyCount})
+                                                                        </span>
+                                                                    )}
+                                                                    {(attempt.exit_count || 0) > exam.max_exits && (
+                                                                        <span className="px-2 py-1 text-xs font-semibold rounded-full bg-yellow-100 text-yellow-800" title="Excessive exits">
+                                                                            🚪 Exits
+                                                                        </span>
+                                                                    )}
+                                                                    {(attempt.window_switches || 0) > 3 && (
+                                                                        <span className="px-2 py-1 text-xs font-semibold rounded-full bg-purple-100 text-purple-800" title={`${attempt.window_switches} window switches`}>
+                                                                            🔄 Switches
+                                                                        </span>
+                                                                    )}
+                                                                    {!hasViolations && (
+                                                                        <span className="text-gray-400 text-xs">✓ Clean</span>
+                                                                    )}
+                                                                </>
+                                                            )
+                                                        })()}
+                                                    </div>
                                                 </td>
                                                 <td className="px-6 py-4 whitespace-nowrap">
                                                     {attempt.time_spent_seconds ? (
