@@ -1542,7 +1542,7 @@ export default function StudentExamPage() {
                                         }}
                                         onKeyDown={(e) => e.key === 'Enter' && handleAccessCodeSubmit()}
                                         placeholder="Enter access code"
-                                        className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl text-center text-lg font-semibold tracking-wider focus:outline-none focus:border-blue-500 uppercase"
+                                        className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl text-center text-lg font-semibold tracking-wider focus:outline-none focus:border-blue-500"
                                         autoFocus
                                         disabled={verifyingAccessCode}
                                     />
