@@ -72,7 +72,9 @@ export async function GET(
             exam: {
                 id: exam.id,
                 title: exam.title,
+                description: exam.description,
                 duration_minutes: exam.duration_minutes,
+                pass_score: exam.pass_score,
                 max_exits: exam.max_exits,
                 shuffle_questions: exam.shuffle_questions,
                 shuffle_options: exam.shuffle_options,
