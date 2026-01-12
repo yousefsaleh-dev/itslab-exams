@@ -296,7 +296,10 @@ export default function StudentExamPage() {
             return
         }
 
-        if (!exam) return
+        if (!exam) {
+            toast.error('Exam not loaded yet. Please wait.')
+            return
+        }
 
         // ====== SERVER-SIDE ACCESS CODE VERIFICATION ======
         if (exam.requires_access_code) {
