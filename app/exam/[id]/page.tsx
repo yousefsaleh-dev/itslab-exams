@@ -285,6 +285,7 @@ export default function StudentExamPage() {
 
     // ====== START EXAM ======
     const startExam = async (savedStudentName?: string) => {
+
         if (!isOnline) {
             toast.error('Cannot start exam while offline')
             return
@@ -1498,7 +1499,9 @@ export default function StudentExamPage() {
                             </div>
 
                             <button
-                                onClick={() => startExam()}
+                                onClick={() => {
+                                    startExam()
+                                }}
                                 disabled={!isOnline || !studentName.trim()}
                                 className="w-full bg-gray-900 text-white py-2.5 rounded-lg font-medium hover:bg-gray-800 transition disabled:opacity-50 disabled:cursor-not-allowed"
                             >
@@ -1514,6 +1517,65 @@ export default function StudentExamPage() {
                         </div>
                     )}
                 </div>
+
+                {/* Access Code Modal - INSIDE start phase */}
+                {showAccessCodeModal && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+                        <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => !verifyingAccessCode && setShowAccessCodeModal(false)} />
+                        <div className="relative bg-white rounded-2xl shadow-2xl p-8 max-w-md w-full">
+                            <div className="text-center">
+                                <div className="w-20 h-20 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-6">
+                                    <ClipboardList className="w-12 h-12 text-blue-600" />
+                                </div>
+                                <h2 className="text-2xl font-bold text-gray-900 mb-2">Access Code Required</h2>
+                                <p className="text-gray-600 mb-6">
+                                    This exam requires an access code to start.
+                                </p>
+
+                                <div className="mb-4">
+                                    <input
+                                        type="text"
+                                        value={accessCodeInput}
+                                        onChange={(e) => {
+                                            setAccessCodeInput(e.target.value)
+                                            setAccessCodeError('')
+                                        }}
+                                        onKeyDown={(e) => e.key === 'Enter' && handleAccessCodeSubmit()}
+                                        placeholder="Enter access code"
+                                        className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl text-center text-lg font-semibold tracking-wider focus:outline-none focus:border-blue-500 uppercase"
+                                        autoFocus
+                                        disabled={verifyingAccessCode}
+                                    />
+                                    {accessCodeError && (
+                                        <p className="text-red-600 text-sm mt-2">{accessCodeError}</p>
+                                    )}
+                                </div>
+
+                                <div className="flex gap-4">
+                                    <button
+                                        onClick={() => setShowAccessCodeModal(false)}
+                                        disabled={verifyingAccessCode}
+                                        className="flex-1 py-3 px-6 bg-gray-100 text-gray-700 rounded-xl font-semibold hover:bg-gray-200 transition disabled:opacity-50"
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button
+                                        onClick={handleAccessCodeSubmit}
+                                        disabled={verifyingAccessCode || !accessCodeInput.trim()}
+                                        className="flex-1 py-3 px-6 bg-blue-600 text-white rounded-xl font-semibold hover:bg-blue-700 transition disabled:opacity-50 flex items-center justify-center gap-2"
+                                    >
+                                        {verifyingAccessCode ? (
+                                            <>
+                                                <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                                Verifying...
+                                            </>
+                                        ) : 'Start Exam'}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                )}
             </div>
         )
     }
@@ -1709,65 +1771,6 @@ export default function StudentExamPage() {
                     </div>
                 )
             })()}
-
-            {/* Access Code Modal */}
-            {showAccessCodeModal && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-                    <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => !verifyingAccessCode && setShowAccessCodeModal(false)} />
-                    <div className="relative bg-white rounded-2xl shadow-2xl p-8 max-w-md w-full">
-                        <div className="text-center">
-                            <div className="w-20 h-20 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-6">
-                                <ClipboardList className="w-12 h-12 text-blue-600" />
-                            </div>
-                            <h2 className="text-2xl font-bold text-gray-900 mb-2">Access Code Required</h2>
-                            <p className="text-gray-600 mb-6">
-                                This exam requires an access code to start.
-                            </p>
-
-                            <div className="mb-4">
-                                <input
-                                    type="text"
-                                    value={accessCodeInput}
-                                    onChange={(e) => {
-                                        setAccessCodeInput(e.target.value)
-                                        setAccessCodeError('')
-                                    }}
-                                    onKeyDown={(e) => e.key === 'Enter' && handleAccessCodeSubmit()}
-                                    placeholder="Enter access code"
-                                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl text-center text-lg font-semibold tracking-wider focus:outline-none focus:border-blue-500 uppercase"
-                                    autoFocus
-                                    disabled={verifyingAccessCode}
-                                />
-                                {accessCodeError && (
-                                    <p className="text-red-600 text-sm mt-2">{accessCodeError}</p>
-                                )}
-                            </div>
-
-                            <div className="flex gap-4">
-                                <button
-                                    onClick={() => setShowAccessCodeModal(false)}
-                                    disabled={verifyingAccessCode}
-                                    className="flex-1 py-3 px-6 bg-gray-100 text-gray-700 rounded-xl font-semibold hover:bg-gray-200 transition disabled:opacity-50"
-                                >
-                                    Cancel
-                                </button>
-                                <button
-                                    onClick={handleAccessCodeSubmit}
-                                    disabled={verifyingAccessCode || !accessCodeInput.trim()}
-                                    className="flex-1 py-3 px-6 bg-blue-600 text-white rounded-xl font-semibold hover:bg-blue-700 transition disabled:opacity-50 flex items-center justify-center gap-2"
-                                >
-                                    {verifyingAccessCode ? (
-                                        <>
-                                            <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                                            Verifying...
-                                        </>
-                                    ) : 'Start Exam'}
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            )}
 
             {/* Submit Modal */}
             {showSubmitModal && (
