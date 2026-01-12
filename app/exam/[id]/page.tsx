@@ -41,6 +41,13 @@ export default function StudentExamPage() {
     const [flaggedQuestions, setFlaggedQuestions] = useState<Record<string, boolean>>({})
     const [fontSize, setFontSize] = useState<'base' | 'lg' | 'xl'>('base')
 
+    // Access code modal state
+    const [showAccessCodeModal, setShowAccessCodeModal] = useState(false)
+    const [accessCodeInput, setAccessCodeInput] = useState('')
+    const [accessCodeError, setAccessCodeError] = useState('')
+    const [verifyingAccessCode, setVerifyingAccessCode] = useState(false)
+    const [pendingStudentName, setPendingStudentName] = useState('')
+
     // Offline grace period state
     const [totalOfflineSeconds, setTotalOfflineSeconds] = useState(0)
     const [currentOfflineDuration, setCurrentOfflineDuration] = useState(0)
@@ -293,34 +300,59 @@ export default function StudentExamPage() {
 
         // ====== SERVER-SIDE ACCESS CODE VERIFICATION ======
         if (exam.requires_access_code) {
-            const enteredCode = prompt('This exam requires an access code. Please enter it:')
-
-            if (!enteredCode) {
-                toast.error('Access code is required to start this exam.')
-                return
-            }
-
-            try {
-                const verifyResponse = await fetch(`/api/exam/${params.id}/verify-access-code`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ accessCode: enteredCode.trim() })
-                })
-
-                const verifyResult = await verifyResponse.json()
-
-                if (!verifyResponse.ok || !verifyResult.valid) {
-                    toast.error('Invalid access code. Cannot start exam.')
-                    return
-                }
-
-                toast.success('Access code verified!')
-            } catch (error) {
-                toast.error('Failed to verify access code. Please try again.')
-                return
-            }
+            // Show custom modal instead of browser prompt
+            setPendingStudentName(examStudentName)
+            setShowAccessCodeModal(true)
+            setAccessCodeInput('')
+            setAccessCodeError('')
+            return // Will continue via handleAccessCodeSubmit
         }
 
+        // No access code required - proceed directly
+        await proceedWithExamStart(examStudentName)
+    }
+
+    // ====== HANDLE ACCESS CODE SUBMISSION ======
+    const handleAccessCodeSubmit = async () => {
+        if (!accessCodeInput.trim()) {
+            setAccessCodeError('Please enter the access code')
+            return
+        }
+
+        setVerifyingAccessCode(true)
+        setAccessCodeError('')
+
+        try {
+            const verifyResponse = await fetch(`/api/exam/${params.id}/verify-access-code`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ accessCode: accessCodeInput.trim() })
+            })
+
+            const verifyResult = await verifyResponse.json()
+
+            if (!verifyResponse.ok || !verifyResult.valid) {
+                setAccessCodeError('Invalid access code. Please try again.')
+                setVerifyingAccessCode(false)
+                return
+            }
+
+            // Access code verified! Close modal and proceed
+            setShowAccessCodeModal(false)
+            toast.success('Access code verified!')
+
+            // IMPORTANT: This button click triggers fullscreen properly
+            await proceedWithExamStart(pendingStudentName)
+
+        } catch (error) {
+            setAccessCodeError('Failed to verify access code. Please try again.')
+        } finally {
+            setVerifyingAccessCode(false)
+        }
+    }
+
+    // ====== PROCEED WITH EXAM START (after access code verified) ======
+    const proceedWithExamStart = async (examStudentName: string) => {
         try {
             // Check if already completed (case-insensitive name match)
             const { data: completedAttempt } = await supabase
@@ -358,7 +390,7 @@ export default function StudentExamPage() {
 
                 if (incompleteAttempt.time_remaining_seconds != null) {
                     // SAFETY CHECK FIRST
-                    if (timeSinceLastActivity > exam.duration_minutes * 60) {
+                    if (timeSinceLastActivity > exam!.duration_minutes * 60) {
                         remaining = incompleteAttempt.time_remaining_seconds
                     } else {
                         // Subtract time that passed since last activity
@@ -366,12 +398,12 @@ export default function StudentExamPage() {
                     }
                 } else {
                     const elapsedTime = Math.floor((Date.now() - new Date(incompleteAttempt.created_at).getTime()) / 1000)
-                    remaining = Math.max(0, (exam.duration_minutes * 60) - elapsedTime)
+                    remaining = Math.max(0, (exam!.duration_minutes * 60) - elapsedTime)
                 }
 
                 if (remaining <= 0) {
                     toast.error('Your previous exam time has expired')
-                    await autoSubmitExpiredAttempt(incompleteAttempt.id, exam, questions)
+                    await autoSubmitExpiredAttempt(incompleteAttempt.id, exam!, questions)
                     return
                 }
 
@@ -401,7 +433,7 @@ export default function StudentExamPage() {
                     exam_id: params.id,
                     student_name: examStudentName.trim(),
                     exit_count: 0,
-                    time_remaining_seconds: exam.duration_minutes * 60,
+                    time_remaining_seconds: exam!.duration_minutes * 60,
                     last_activity: new Date().toISOString(),
                     started_at: new Date().toISOString(),
                 }])
@@ -412,7 +444,7 @@ export default function StudentExamPage() {
             }
 
             setAttemptId(newAttemptData[0].id)
-            setTimeLeft(exam.duration_minutes * 60)
+            setTimeLeft(exam!.duration_minutes * 60)
             setPhase('exam')
             enterFullScreen()
 
@@ -1674,6 +1706,65 @@ export default function StudentExamPage() {
                     </div>
                 )
             })()}
+
+            {/* Access Code Modal */}
+            {showAccessCodeModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+                    <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => !verifyingAccessCode && setShowAccessCodeModal(false)} />
+                    <div className="relative bg-white rounded-2xl shadow-2xl p-8 max-w-md w-full">
+                        <div className="text-center">
+                            <div className="w-20 h-20 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-6">
+                                <ClipboardList className="w-12 h-12 text-blue-600" />
+                            </div>
+                            <h2 className="text-2xl font-bold text-gray-900 mb-2">Access Code Required</h2>
+                            <p className="text-gray-600 mb-6">
+                                This exam requires an access code to start.
+                            </p>
+
+                            <div className="mb-4">
+                                <input
+                                    type="text"
+                                    value={accessCodeInput}
+                                    onChange={(e) => {
+                                        setAccessCodeInput(e.target.value)
+                                        setAccessCodeError('')
+                                    }}
+                                    onKeyDown={(e) => e.key === 'Enter' && handleAccessCodeSubmit()}
+                                    placeholder="Enter access code"
+                                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl text-center text-lg font-semibold tracking-wider focus:outline-none focus:border-blue-500 uppercase"
+                                    autoFocus
+                                    disabled={verifyingAccessCode}
+                                />
+                                {accessCodeError && (
+                                    <p className="text-red-600 text-sm mt-2">{accessCodeError}</p>
+                                )}
+                            </div>
+
+                            <div className="flex gap-4">
+                                <button
+                                    onClick={() => setShowAccessCodeModal(false)}
+                                    disabled={verifyingAccessCode}
+                                    className="flex-1 py-3 px-6 bg-gray-100 text-gray-700 rounded-xl font-semibold hover:bg-gray-200 transition disabled:opacity-50"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={handleAccessCodeSubmit}
+                                    disabled={verifyingAccessCode || !accessCodeInput.trim()}
+                                    className="flex-1 py-3 px-6 bg-blue-600 text-white rounded-xl font-semibold hover:bg-blue-700 transition disabled:opacity-50 flex items-center justify-center gap-2"
+                                >
+                                    {verifyingAccessCode ? (
+                                        <>
+                                            <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                            Verifying...
+                                        </>
+                                    ) : 'Start Exam'}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Submit Modal */}
             {showSubmitModal && (
