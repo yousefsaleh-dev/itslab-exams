@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store'
 import { supabase } from '@/lib/supabase'
-import { ArrowLeft, CheckCircle2, XCircle, Clock, AlertTriangle, User, Trophy } from 'lucide-react'
+import { ArrowLeft, CheckCircle2, XCircle, Clock, AlertTriangle, User, Trophy, LogOut } from 'lucide-react'
 import toast from 'react-hot-toast'
 import Link from 'next/link'
 
@@ -58,43 +58,14 @@ export default function AttemptDetailsPage() {
 
     const fetchAttemptDetails = async () => {
         try {
-            const { data: attemptData, error: attemptError } = await supabase
-                .from('student_attempts')
-                .select(`
-          *,
-          exam:exams (
-            id,
-            title,
-            pass_score
-          )
-        `)
-                .eq('id', params.id)
-                .single()
+            const response = await fetch(`/api/admin/attempt/${params.id}/details?adminId=${admin?.id}`)
+            const data = await response.json()
 
-            if (attemptError) throw attemptError
+            if (!data.success) {
+                throw new Error(data.error || 'Failed to load attempt details')
+            }
 
-            const { data: answersData, error: answersError } = await supabase
-                .from('student_answers')
-                .select(`
-          *,
-          question:questions (
-            question_text,
-            points,
-            options (
-              id,
-              option_text,
-              is_correct
-            )
-          )
-        `)
-                .eq('attempt_id', params.id)
-
-            if (answersError) throw answersError
-
-            setAttempt({
-                ...attemptData,
-                answers: answersData || []
-            } as AttemptDetails)
+            setAttempt(data.attempt)
         } catch (error) {
             // console.error('Error fetching attempt details:', error)
             toast.error('Failed to load attempt details')
@@ -199,18 +170,19 @@ export default function AttemptDetailsPage() {
                 </div>
 
                 {/* Violations Timeline */}
-                {attempt.suspicious_activities && Array.isArray(attempt.suspicious_activities) && attempt.suspicious_activities.length > 0 && (
+                {(attempt.exit_count > 0 || (attempt.window_switches && attempt.window_switches > 0) || (attempt.suspicious_activities && attempt.suspicious_activities.length > 0)) && (
                     <div className="bg-white rounded-xl border border-red-200 p-6 mb-6">
                         <div className="flex items-center gap-2 mb-4">
                             <AlertTriangle className="w-5 h-5 text-red-600" />
                             <h2 className="text-xl font-semibold text-gray-900">Security Violations</h2>
                             <span className="ml-auto px-3 py-1 bg-red-100 text-red-700 rounded-full text-sm font-semibold">
-                                {attempt.suspicious_activities.length} violations
+                                {(attempt.suspicious_activities?.length || 0) + (attempt.suspicious_activities?.length === 0 ? attempt.exit_count + (attempt.window_switches || 0) : 0)} detected
                             </span>
                         </div>
 
                         <div className="space-y-3 max-h-96 overflow-y-auto">
-                            {attempt.suspicious_activities.map((activity: any, idx: number) => (
+                            {/* If we have detailed logs, show them */}
+                            {attempt.suspicious_activities && attempt.suspicious_activities.map((activity: any, idx: number) => (
                                 <div key={idx} className="flex items-start gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
                                     <div className="flex-shrink-0 mt-0.5">
                                         {activity.type === 'devtools_detected' && (
@@ -238,6 +210,45 @@ export default function AttemptDetailsPage() {
                                     </div>
                                 </div>
                             ))}
+
+                            {/* If NO detailed logs but we have counts, show generic items */}
+                            {(!attempt.suspicious_activities || attempt.suspicious_activities.length === 0) && (
+                                <>
+                                    {/* Show Exits */}
+                                    {Array.from({ length: attempt.exit_count }).map((_, i) => (
+                                        <div key={`exit-${i}`} className="flex items-start gap-3 p-3 bg-red-50 rounded-lg border border-red-100">
+                                            <div className="flex-shrink-0 mt-0.5">
+                                                <div className="w-8 h-8 rounded-full bg-red-200 flex items-center justify-center">
+                                                    <AlertTriangle className="w-4 h-4 text-red-700" />
+                                                </div>
+                                            </div>
+                                            <div className="flex-1 min-w-0">
+                                                <div className="flex items-center gap-2">
+                                                    <span className="font-semibold text-red-900">Fullscreen Exit Detected</span>
+                                                </div>
+                                                <p className="text-sm text-red-700 mt-0.5">Student exited fullscreen mode (exact time not recorded)</p>
+                                            </div>
+                                        </div>
+                                    ))}
+
+                                    {/* Show Switches */}
+                                    {Array.from({ length: attempt.window_switches || 0 }).map((_, i) => (
+                                        <div key={`switch-${i}`} className="flex items-start gap-3 p-3 bg-orange-50 rounded-lg border border-orange-100">
+                                            <div className="flex-shrink-0 mt-0.5">
+                                                <div className="w-8 h-8 rounded-full bg-orange-200 flex items-center justify-center">
+                                                    <LogOut className="w-4 h-4 text-orange-700" />
+                                                </div>
+                                            </div>
+                                            <div className="flex-1 min-w-0">
+                                                <div className="flex items-center gap-2">
+                                                    <span className="font-semibold text-orange-900">Window Switch / Focus Lost</span>
+                                                </div>
+                                                <p className="text-sm text-orange-700 mt-0.5">Student switched tabs or windows (exact time not recorded)</p>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </>
+                            )}
                         </div>
                     </div>
                 )}

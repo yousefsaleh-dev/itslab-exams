@@ -1,0 +1,131 @@
+{
+  "tech_stack": [
+    "TypeScript",
+    "Next.js 16",
+    "React 19",
+    "Supabase (PostgreSQL)",
+    "Tailwind CSS",
+    "Zustand",
+    "React Hot Toast",
+    "Bcrypt",
+    "Crypto-js",
+    "Resend",
+    "Nodemailer",
+    "XLSX"
+  ],
+  "features": [
+    {
+      "name": "Admin Authentication",
+      "description": "Admin login, registration, password reset functionality with bcrypt hashing",
+      "files": [
+        "app/admin/login/page.tsx",
+        "app/admin/forgot-password/page.tsx",
+        "app/admin/reset-password/page.tsx",
+        "app/api/admin/login/route.ts",
+        "app/api/admin/register/route.ts",
+        "app/api/admin/forgot-password/route.ts",
+        "app/api/admin/reset-password/route.ts",
+        "lib/store.ts"
+      ]
+    },
+    {
+      "name": "Admin Dashboard",
+      "description": "Main dashboard for admins to view and manage exams with statistics",
+      "files": [
+        "app/admin/dashboard/page.tsx"
+      ]
+    },
+    {
+      "name": "Exam Creation",
+      "description": "Create new exams with questions, options, and security settings",
+      "files": [
+        "app/admin/create-exam/page.tsx",
+        "components/admin/ExamForm.tsx",
+        "app/api/admin/exam/create/route.ts"
+      ]
+    },
+    {
+      "name": "Exam Management",
+      "description": "Edit, delete, clone, and toggle exam status",
+      "files": [
+        "app/admin/edit-exam/[id]/page.tsx",
+        "app/admin/exam/[id]/page.tsx",
+        "app/api/admin/exam/update/[id]/route.ts",
+        "app/api/admin/exam/delete/route.ts",
+        "app/api/admin/exam/toggle-status/route.ts",
+        "app/api/exam/clone/route.ts"
+      ]
+    },
+    {
+      "name": "Exam Taking Interface",
+      "description": "Student-facing exam interface with fullscreen protection and timer",
+      "files": [
+        "app/exam/[id]/page.tsx",
+        "app/api/exam/[id]/details/route.ts",
+        "app/api/exam/[id]/questions/route.ts",
+        "app/api/exam/[id]/verify-access-code/route.ts"
+      ]
+    },
+    {
+      "name": "Security & Proctoring",
+      "description": "Fullscreen enforcement, exit tracking, copy prevention, DevTools blocking",
+      "files": [
+        "hooks/useExamProtection.tsx",
+        "lib/secureStorage.ts"
+      ]
+    },
+    {
+      "name": "Time Management",
+      "description": "Exam timer, offline handling, grace period, auto-submit on expiry",
+      "files": [
+        "app/exam/[id]/page.tsx",
+        "app/api/exam/[id]/offline/route.ts",
+        "supabase/functions/auto-submit-expired/index.ts"
+      ]
+    },
+    {
+      "name": "Exam Submission",
+      "description": "Server-side scoring, answer validation, and result calculation",
+      "files": [
+        "app/api/exam/[id]/submit/route.ts"
+      ]
+    },
+    {
+      "name": "Exam Recovery",
+      "description": "Recover exam state from localStorage loss or network interruptions",
+      "files": [
+        "app/api/exam/[id]/recover/route.ts",
+        "app/exam/[id]/page.tsx"
+      ]
+    },
+    {
+      "name": "Attempt Management",
+      "description": "View and manage student attempts, delete attempts, view details",
+      "files": [
+        "app/admin/attempt/[id]/page.tsx",
+        "app/api/admin/attempt/delete/route.ts"
+      ]
+    },
+    {
+      "name": "Database Integration",
+      "description": "Supabase client setup, type definitions, and database operations",
+      "files": [
+        "lib/supabase.ts"
+      ]
+    },
+    {
+      "name": "Question Generation",
+      "description": "AI-powered question generation API endpoint",
+      "files": [
+        "app/api/generate-questions/route.ts"
+      ]
+    },
+    {
+      "name": "Home Page",
+      "description": "Landing page with instructions for students",
+      "files": [
+        "app/page.tsx"
+      ]
+    }
+  ]
+}

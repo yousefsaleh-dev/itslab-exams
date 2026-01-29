@@ -4,9 +4,11 @@ import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store'
 import { supabase, Exam, StudentAttempt } from '@/lib/supabase'
-import { ArrowLeft, Users, CheckCircle, XCircle, Clock, AlertTriangle, Copy, Download, Edit, Trash2 } from 'lucide-react'
+import { ArrowLeft, Users, CheckCircle, XCircle, Clock, AlertTriangle, Copy, Download, Edit, Trash2, StopCircle, LogOut, ChevronRight, Search, Eye, Share2 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import Link from 'next/link'
+import ExamPreviewModal from '@/components/admin/ExamPreviewModal'
+import ShareExamModal from '@/components/admin/ShareExamModal'
 
 export default function ExamDetailsPage() {
     const params = useParams()
@@ -18,6 +20,11 @@ export default function ExamDetailsPage() {
     const [answers, setAnswers] = useState<any[]>([])
     const [loading, setLoading] = useState(true)
     const [activeTab, setActiveTab] = useState<'attempts' | 'analytics'>('attempts')
+    const [selectedAttemptForViolations, setSelectedAttemptForViolations] = useState<StudentAttempt | null>(null)
+
+    const [searchQuery, setSearchQuery] = useState('')
+    const [showPreview, setShowPreview] = useState(false)
+    const [showShare, setShowShare] = useState(false)
 
     useEffect(() => {
         if (!admin) {
@@ -29,7 +36,6 @@ export default function ExamDetailsPage() {
 
     const fetchExamDetails = async () => {
         try {
-            // Use API route to get full exam data (bypasses RLS) - include adminId for auth
             const response = await fetch(`/api/exam/${params.id}/details?adminId=${admin?.id}`)
 
             if (!response.ok) {
@@ -45,27 +51,13 @@ export default function ExamDetailsPage() {
             setExam(data.exam)
             setQuestions(data.questions || [])
 
-            // Fetch attempts separately (no RLS issues here)
-            const { data: attemptsData, error: attemptsError } = await supabase
-                .from('student_attempts')
-                .select('*')
-                .eq('exam_id', params.id)
-                .order('started_at', { ascending: false })
+            // Fetch attempts via API (Bypassing RLS)
+            const attemptsResponse = await fetch(`/api/admin/exam/${params.id}/attempts?adminId=${admin?.id}`)
+            const attemptsData = await attemptsResponse.json()
 
-            if (attemptsError) throw attemptsError
-            setAttempts(attemptsData || [])
-
-            // Fetch Answers for Analytics
-            if (attemptsData && attemptsData.length > 0) {
-                const attemptIds = attemptsData.map(a => a.id)
-                const { data: answersData, error: answersError } = await supabase
-                    .from('student_answers')
-                    .select('question_id, is_correct')
-                    .in('attempt_id', attemptIds)
-
-                if (!answersError) {
-                    setAnswers(answersData || [])
-                }
+            if (attemptsData.success) {
+                setAttempts(attemptsData.attempts || [])
+                setAnswers(attemptsData.answers || [])
             }
         } catch (error) {
             toast.error('Failed to load exam details')
@@ -84,7 +76,6 @@ export default function ExamDetailsPage() {
         if (!exam) return
 
         try {
-            // Use secure API route with admin authentication
             const response = await fetch('/api/admin/exam/toggle-status', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -106,7 +97,6 @@ export default function ExamDetailsPage() {
 
     const exportToExcel = async (mode: 'simple' | 'detailed' = 'simple') => {
         try {
-            // Dynamic import for xlsx
             const XLSX = await import('xlsx')
 
             const exportData = attempts.map(attempt => {
@@ -147,23 +137,10 @@ export default function ExamDetailsPage() {
             const ws = XLSX.utils.json_to_sheet(exportData)
             const wb = XLSX.utils.book_new()
             XLSX.utils.book_append_sheet(wb, ws, 'Results')
-
-            // Auto-size columns
-            const maxWidth = exportData.reduce((w: any, r: any) => {
-                return Object.keys(r).reduce((acc, key) => {
-                    const cellWidth = String(r[key]).length + 2
-                    return { ...acc, [key]: Math.max(acc[key] || 10, cellWidth) }
-                }, w)
-            }, {})
-
-            ws['!cols'] = Object.keys(maxWidth).map(key => ({ wch: maxWidth[key] }))
-
-            const fileName = `${exam?.title.replace(/\s+/g, '_')}_${mode === 'detailed' ? 'Detailed_' : ''}Results.xlsx`
-            XLSX.writeFile(wb, fileName)
-            toast.success(`${mode === 'detailed' ? 'Detailed' : 'Simple'} results exported!`)
+            XLSX.writeFile(wb, `${exam?.title}_${mode}_Results.xlsx`)
+            toast.success('Export Successful')
         } catch (error) {
-            // console.error('Export error:', error)
-            toast.error('Failed to export results')
+            toast.error('Failed to export')
         }
     }
 
@@ -171,432 +148,542 @@ export default function ExamDetailsPage() {
         if (!confirm('Are you sure you want to delete this attempt?')) return
 
         try {
-            // Use secure API route with admin authentication
             const response = await fetch('/api/admin/attempt/delete', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ attemptId, adminId: admin?.id })
             })
 
-            const data = await response.json()
-
-            if (!response.ok) {
-                throw new Error(data.error || 'Failed to delete attempt')
-            }
+            if (!response.ok) throw new Error('Failed to delete')
 
             setAttempts(attempts.filter(a => a.id !== attemptId))
             toast.success('Attempt deleted')
-        } catch (error: any) {
-            toast.error(error.message || 'Failed to delete attempt')
+        } catch (error) {
+            toast.error('Failed to delete attempt')
         }
     }
 
-    if (loading) {
-        return (
-            <div className="min-h-screen bg-white relative overflow-hidden flex items-center justify-center">
-                <div className="text-xl text-gray-600">Loading...</div>
-            </div>
-        )
+    const forceFinishAttempt = async (attemptId: string) => {
+        if (!confirm('Are you sure you want to force finish this attempt? This will mark it as completed.')) return
+
+        try {
+            const response = await fetch('/api/admin/attempt/force-finish', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ attemptId, adminId: admin?.id })
+            })
+
+            if (!response.ok) throw new Error('Failed to update')
+
+            // Update local state
+            setAttempts(attempts.map(a =>
+                a.id === attemptId
+                    ? { ...a, completed: true, completed_at: new Date().toISOString() }
+                    : a
+            ))
+            toast.success('Attempt marked as completed')
+        } catch (error) {
+            toast.error('Failed to force finish attempt')
+        }
     }
 
-    if (!exam) {
-        return (
-            <div className="min-h-screen bg-white relative overflow-hidden flex items-center justify-center">
-                <div className="text-xl text-gray-600">Exam not found</div>
-            </div>
-        )
-    }
+    if (loading) return <div className="min-h-screen grid place-items-center bg-white text-gray-500">Loading...</div>
+    if (!exam) return <div className="min-h-screen grid place-items-center bg-white text-gray-500">Exam not found</div>
+
+    const filteredAttempts = attempts.filter(a =>
+        a.student_name.toLowerCase().includes(searchQuery.toLowerCase())
+    )
 
     const completedAttempts = attempts.filter(a => a.completed)
-    const avgScore = completedAttempts.length > 0
-        ? completedAttempts.reduce((sum, a) => sum + (a.score || 0), 0) / completedAttempts.length
-        : 0
     const passedAttempts = completedAttempts.filter(a => a.score && a.score >= exam.pass_score)
-    const passRate = completedAttempts.length > 0
-        ? ((passedAttempts.length / completedAttempts.length) * 100)
-        : 0
-
-    // Analytics Calculations
-    const getQuestionStats = () => {
-        return questions.map(q => {
-            const qAnswers = answers.filter(a => a.question_id === q.id)
-            const totalAnswered = qAnswers.length
-            const correct = qAnswers.filter(a => a.is_correct).length
-            const correctRate = totalAnswered > 0 ? (correct / totalAnswered) * 100 : 0
-            return { ...q, totalAnswered, correctRate }
-        }).sort((a, b) => a.correctRate - b.correctRate) // Sort by hardest first
-    }
-
-    const questionStats = getQuestionStats()
-    const hardestQuestions = questionStats.slice(0, 5)
+    const passRate = completedAttempts.length > 0 ? ((passedAttempts.length / completedAttempts.length) * 100) : 0
+    const avgScore = completedAttempts.length > 0 ? completedAttempts.reduce((sum, a) => sum + (a.score || 0), 0) / completedAttempts.length : 0
 
     return (
-        <div className="min-h-screen bg-gray-50">
-            <header className="bg-white/80 backdrop-blur-xl shadow-sm border-b border-gray-200/60 sticky top-0 z-20">
-                <div className="max-w-7xl mx-auto px-4 py-4 sm:px-6 lg:px-8">
-                    <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-4">
-                            <Link
-                                href="/admin/dashboard"
-                                className="p-2 hover:bg-gray-100 rounded-lg transition"
-                            >
-                                <ArrowLeft className="w-5 h-5" />
-                            </Link>
-                            <div>
-                                <h1 className="text-2xl font-bold text-gray-900">{exam.title}</h1>
-                                <p className="text-gray-600">{exam.description}</p>
+        <div className="min-h-screen bg-gray-50 text-gray-900 font-sans">
+            {/* Header */}
+            <header className="bg-white border-b border-gray-200 sticky top-0 z-20">
+                <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
+                    <div className="flex items-center gap-4">
+                        <Link href="/admin/dashboard" className="p-2 hover:bg-gray-100 rounded-lg text-gray-500 hover:text-gray-900 transition-colors">
+                            <ArrowLeft className="w-5 h-5" />
+                        </Link>
+                        <div>
+                            <h1 className="text-lg font-bold text-gray-900">{exam.title}</h1>
+                            <div className="flex items-center gap-2 text-xs text-gray-500">
+                                <span className={exam.is_active ? "text-green-600 font-medium" : "text-gray-400"}>
+                                    {exam.is_active ? '● Active' : '● Inactive'}
+                                </span>
+                                <span>|</span>
+                                <span>{attempts.length} Total Attempts</span>
                             </div>
                         </div>
-                        <div className="flex gap-2">
-                            <button
-                                onClick={() => exportToExcel('simple')}
-                                disabled={attempts.length === 0}
-                                className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-xl hover:bg-green-700 transition disabled:opacity-50 disabled:cursor-not-allowed shadow-md"
-                            >
-                                <Download className="w-5 h-5" />
-                                Export
-                            </button>
-                            <button
-                                onClick={() => exportToExcel('detailed')}
-                                disabled={attempts.length === 0}
-                                className="flex items-center gap-2 px-4 py-2 bg-green-800 text-white rounded-xl hover:bg-green-900 transition disabled:opacity-50 disabled:cursor-not-allowed shadow-md"
-                            >
-                                <Download className="w-5 h-5" />
-                                Detailed Excel
-                            </button>
-                            <Link
-                                href={`/admin/edit-exam/${exam.id}`}
-                                className="flex items-center gap-2 px-4 py-2 bg-gray-900 text-white rounded-xl hover:bg-gray-800 transition shadow-md"
-                            >
-                                <Edit className="w-5 h-5" />
-                                Edit Exam
-                            </Link>
-                            <button
-                                onClick={copyLink}
-                                className="flex items-center gap-2 px-4 py-2 bg-gray-700 text-white rounded-xl hover:bg-gray-600 transition shadow-md"
-                            >
-                                <Copy className="w-5 h-5" />
-                                Copy Link
-                            </button>
-                            <button
-                                onClick={toggleExamStatus}
-                                className={`px-4 py-2 rounded-xl transition font-semibold shadow-md ${exam.is_active
-                                    ? 'bg-red-100 text-red-700 hover:bg-red-200'
-                                    : 'bg-green-100 text-green-700 hover:bg-green-200'
-                                    }`}
-                            >
-                                {exam.is_active ? 'Deactivate' : 'Activate'}
-                            </button>
-                        </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <button onClick={copyLink} className="p-2 text-gray-500 hover:bg-gray-100 rounded-lg" title="Copy Link">
+                            <Copy className="w-4 h-4" />
+                        </button>
+                        <button onClick={() => exportToExcel('simple')} className="flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors">
+                            <Download className="w-4 h-4" />
+                            <span>Export</span>
+                        </button>
+
+                        <button
+                            onClick={() => setShowPreview(true)}
+                            className="flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors"
+                        >
+                            <Eye className="w-4 h-4" />
+                            <span>Preview</span>
+                        </button>
+
+                        <button
+                            onClick={() => setShowShare(true)}
+                            className="flex items-center gap-2 px-3 py-1.5 bg-blue-50 border border-blue-200 text-blue-700 rounded-lg text-sm font-medium hover:bg-blue-100 transition-colors"
+                        >
+                            <Share2 className="w-4 h-4" />
+                            <span>Share</span>
+                        </button>
+                        <Link href={`/admin/edit-exam/${exam.id}`} className="flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors">
+                            <Edit className="w-4 h-4" />
+                            <span>Edit</span>
+                        </Link>
+                        <button
+                            onClick={toggleExamStatus}
+                            className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${exam.is_active
+                                ? 'bg-red-50 text-red-600 hover:bg-red-100'
+                                : 'bg-green-600 text-white hover:bg-green-700'
+                                }`}
+                        >
+                            {exam.is_active ? 'Deactivate' : 'Activate Exam'}
+                        </button>
                     </div>
                 </div>
             </header>
 
-            <main className="max-w-7xl mx-auto px-4 py-8 sm:px-6 lg:px-8">
-                {/* Stats */}
-                <div className="grid grid-cols-1 md:grid-cols-5 gap-6 mb-8">
-                    <StatCard
-                        icon={<Users className="w-8 h-8 text-gray-900" />}
-                        title="Total Attempts"
-                        value={attempts.length}
-                    />
-                    <StatCard
-                        icon={<CheckCircle className="w-8 h-8 text-green-600" />}
-                        title="Completed"
-                        value={completedAttempts.length}
-                    />
-                    <StatCard
-                        icon={<CheckCircle className="w-8 h-8 text-blue-600" />}
-                        title="Pass Rate"
-                        value={`${passRate.toFixed(1)}%`}
-                    />
-                    <StatCard
-                        icon={<Clock className="w-8 h-8 text-orange-600" />}
-                        title="In Progress"
-                        value={attempts.filter(a => !a.completed).length}
-                    />
-                    <StatCard
-                        icon={<AlertTriangle className="w-8 h-8 text-red-600" />}
-                        title="Avg Score"
-                        value={`${avgScore.toFixed(1)}%`}
-                    />
+            <main className="max-w-7xl mx-auto px-4 py-8">
+                {/* Stats Bar */}
+                <div className="grid grid-cols-4 gap-4 mb-8 bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
+                    <StatBox label="Completion Rate" value={`${Math.round((completedAttempts.length / (attempts.length || 1)) * 100)}%`} sub={`${completedAttempts.length}/${attempts.length}`} />
+                    <StatBox label="Pass Rate" value={`${passRate.toFixed(1)}%`} sub={`${passedAttempts.length} passed`} />
+                    <StatBox label="Average Score" value={`${avgScore.toFixed(1)}%`} />
+                    <StatBox label="Pending" value={(attempts.length - completedAttempts.length).toString()} highlight={true} />
                 </div>
 
-                {/* Exam Info */}
-                <div className="bg-white/80 backdrop-blur-xl rounded-2xl shadow-2xl shadow-black/10 border border-gray-200/60 p-6 mb-8">
-                    <h2 className="text-xl font-semibold mb-4">Exam Information</h2>
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                        <InfoItem label="Duration" value={`${exam.duration_minutes} minutes`} />
-                        <InfoItem label="Pass Score" value={`${exam.pass_score}%`} />
-                        <InfoItem label="Max Exits" value={exam.max_exits} />
-                        <InfoItem label="Status" value={exam.is_active ? 'Active' : 'Inactive'} />
-                        <InfoItem label="Shuffle Questions" value={exam.shuffle_questions ? 'Yes' : 'No'} />
-                        <InfoItem label="Shuffle Options" value={exam.shuffle_options ? 'Yes' : 'No'} />
-                        <InfoItem label="Show Results" value={exam.show_results ? 'Yes' : 'No'} />
-                        <InfoItem label="Created" value={new Date(exam.created_at).toLocaleDateString()} />
+                {/* Tabs & Search */}
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+                    <div className="flex gap-1 bg-gray-100 p-1 rounded-lg self-start">
+                        <button
+                            onClick={() => setActiveTab('attempts')}
+                            className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === 'attempts' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                        >
+                            Attempts
+                        </button>
+                        <button
+                            onClick={() => setActiveTab('analytics')}
+                            className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === 'analytics' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                        >
+                            Analytics
+                        </button>
                     </div>
+
+                    {activeTab === 'attempts' && (
+                        <div className="relative">
+                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                            <input
+                                type="text"
+                                placeholder="Search by name..."
+                                value={searchQuery}
+                                onChange={(e) => setSearchQuery(e.target.value)}
+                                className="pl-9 pr-4 py-1.5 bg-white border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-black/5 w-64"
+                            />
+                        </div>
+                    )}
                 </div>
 
-                {/* Tab Navigation */}
-                <div className="flex gap-4 mb-6 border-b border-gray-200">
-                    <button
-                        onClick={() => setActiveTab('attempts')}
-                        className={`pb-2 font-medium transition ${activeTab === 'attempts' ? 'text-gray-900 border-b-2 border-gray-900' : 'text-gray-500 hover:text-gray-700'}`}
-                    >
-                        Student Attempts
-                    </button>
-                    <button
-                        onClick={() => setActiveTab('analytics')}
-                        className={`pb-2 font-medium transition ${activeTab === 'analytics' ? 'text-gray-900 border-b-2 border-gray-900' : 'text-gray-500 hover:text-gray-700'}`}
-                    >
-                        Detailed Analytics
-                    </button>
-                </div>
+                {/* Content */}
+                {activeTab === 'attempts' ? (
+                    <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+                        <table className="w-full text-left">
+                            <thead className="bg-gray-50 border-b border-gray-200">
+                                <tr>
+                                    <th className="px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Student</th>
+                                    <th className="px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Status</th>
+                                    <th className="px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Score</th>
+                                    <th className="px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Security</th>
+                                    <th className="px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Time</th>
+                                    <th className="px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider text-right">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100">
+                                {filteredAttempts.length === 0 ? (
+                                    <tr>
+                                        <td colSpan={6} className="px-6 py-12 text-center text-gray-500">No attempts found</td>
+                                    </tr>
+                                ) : (
+                                    filteredAttempts.map((attempt) => {
+                                        // Calc violations
+                                        const activities = Array.isArray(attempt.suspicious_activities) ? attempt.suspicious_activities : []
+                                        const devtools = activities.filter((a: any) => a.type === 'devtools_detected').length
+                                        const copy = activities.filter((a: any) => a.type === 'copy_attempt').length
+                                        const exit = attempt.exit_count || 0
+                                        const switches = attempt.window_switches || 0
+                                        const totalViolations = devtools + copy + exit + switches + (activities.length > (devtools + copy) ? activities.length - (devtools + copy) : 0)
+                                        const hasViolations = totalViolations > 0
 
-                {activeTab === 'analytics' ? (
-                    <div className="space-y-8 animate-in fade-in duration-300">
-                        {/* Question Performance Analysis */}
-                        <div className="bg-white/80 backdrop-blur-xl rounded-2xl shadow-2xl shadow-black/10 border border-gray-200/60 p-6">
-                            <h2 className="text-xl font-semibold mb-6 flex items-center gap-2">
-                                <AlertTriangle className="w-5 h-5 text-orange-500" />
-                                Hardest Questions
-                            </h2>
-                            <div className="space-y-4">
-                                {hardestQuestions.map((q, idx) => (
-                                    <div key={q.id} className="border-b border-gray-100 last:border-0 pb-4 last:pb-0">
-                                        <div className="flex justify-between items-start mb-2">
-                                            <span className="font-medium text-gray-900 w-3/4">
-                                                {idx + 1}. {q.question_text}
-                                            </span>
-                                            <span className={`px-3 py-1 rounded-full text-xs font-bold ${q.correctRate < 50 ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'}`}>
-                                                {q.correctRate.toFixed(1)}% Correct
-                                            </span>
-                                        </div>
-                                        <div className="w-full bg-gray-200 rounded-full h-2">
-                                            <div
-                                                className={`h-2 rounded-full ${q.correctRate < 50 ? 'bg-red-500' : 'bg-yellow-500'}`}
-                                                style={{ width: `${q.correctRate}%` }}
-                                            />
-                                        </div>
-                                        <p className="text-xs text-gray-500 mt-1">
-                                            Answered by {q.totalAnswered} students
-                                        </p>
-                                    </div>
-                                ))}
-                                {hardestQuestions.length === 0 && (
-                                    <p className="text-gray-500">No data available yet.</p>
-                                )}
-                            </div>
-                        </div>
-                    </div>
-                ) : (
-                    <div className="bg-white/80 backdrop-blur-xl rounded-2xl shadow-2xl shadow-black/10 border border-gray-200/60 overflow-hidden">
-                        <div className="px-6 py-4 border-b border-gray-200 bg-gray-50">
-                            <h2 className="text-xl font-semibold">Student Attempts</h2>
-                        </div>
-
-
-                        {attempts.length === 0 ? (
-                            <div className="px-6 py-12 text-center text-gray-500">
-                                No attempts yet
-                            </div>
-                        ) : (
-                            <div className="overflow-x-auto">
-                                <table className="w-full">
-                                    <thead className="bg-gray-50">
-                                        <tr>
-                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                                Student Name
-                                            </th>
-                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                                Status
-                                            </th>
-                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                                Score
-                                            </th>
-                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                                Violations
-                                            </th>
-                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                                Time
-                                            </th>
-                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                                Exits
-                                            </th>
-                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                                Switches
-                                            </th>
-                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                                Started
-                                            </th>
-                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                                Actions
-                                            </th>
-                                        </tr>
-                                    </thead>
-                                    <tbody className="bg-white divide-y divide-gray-200">
-                                        {attempts.map((attempt) => (
-                                            <tr key={attempt.id} className="hover:bg-gray-50">
-                                                <td className="px-6 py-4 whitespace-nowrap">
+                                        return (
+                                            <tr key={attempt.id} className="hover:bg-gray-50 group">
+                                                <td className="px-6 py-4">
                                                     <div className="font-medium text-gray-900">{attempt.student_name}</div>
+                                                    <div className="text-xs text-gray-400">{new Date(attempt.started_at).toLocaleDateString()}</div>
                                                 </td>
-                                                <td className="px-6 py-4 whitespace-nowrap">
+                                                <td className="px-6 py-4">
                                                     {attempt.completed ? (
-                                                        <span className="px-2 py-1 text-xs font-semibold rounded-full bg-green-100 text-green-800">
+                                                        <span className="inline-flex items-center px-2 py-1 rounded-md text-xs font-medium bg-green-50 text-green-700 border border-green-100">
                                                             Completed
                                                         </span>
                                                     ) : (
-                                                        <span className="px-2 py-1 text-xs font-semibold rounded-full bg-yellow-100 text-yellow-800">
+                                                        <span className="inline-flex items-center px-2 py-1 rounded-md text-xs font-medium bg-yellow-50 text-yellow-700 border border-yellow-100">
                                                             In Progress
                                                         </span>
                                                     )}
                                                 </td>
-                                                <td className="px-6 py-4 whitespace-nowrap">
+                                                <td className="px-6 py-4 font-mono text-sm">
                                                     {attempt.completed ? (
-                                                        <div className="flex items-center gap-2">
-                                                            <span className="font-semibold">
-                                                                {attempt.score?.toFixed(1)}%
-                                                            </span>
-                                                            {attempt.score && attempt.score >= exam.pass_score ? (
-                                                                <CheckCircle className="w-4 h-4 text-green-600" />
-                                                            ) : (
-                                                                <XCircle className="w-4 h-4 text-red-600" />
-                                                            )}
-                                                        </div>
+                                                        <span className={attempt.score && attempt.score >= exam.pass_score ? "text-green-600 font-bold" : "text-red-500 font-bold"}>
+                                                            {attempt.score?.toFixed(1)}%
+                                                        </span>
                                                     ) : (
-                                                        <span className="text-gray-400">-</span>
+                                                        <span className="text-gray-300">-</span>
                                                     )}
                                                 </td>
-                                                {/* Violations Column */}
                                                 <td className="px-6 py-4">
-                                                    <div className="flex flex-wrap gap-1">
-                                                        {(() => {
-                                                            const activities = Array.isArray(attempt.suspicious_activities) ? attempt.suspicious_activities : []
-                                                            const devtoolsCount = activities.filter((a: any) => a.type === 'devtools_detected').length
-                                                            const copyCount = activities.filter((a: any) => a.type === 'copy_attempt').length
-                                                            const hasViolations = devtoolsCount > 0 || copyCount > 0 || (attempt.exit_count || 0) > exam.max_exits || (attempt.window_switches || 0) > 3
-
-                                                            return (
-                                                                <>
-                                                                    {devtoolsCount > 0 && (
-                                                                        <span className="px-2 py-1 text-xs font-semibold rounded-full bg-red-100 text-red-800" title={`DevTools detected ${devtoolsCount} times`}>
-                                                                            🛡️ DevTools {devtoolsCount > 1 && `(${devtoolsCount})`}
-                                                                        </span>
-                                                                    )}
-                                                                    {copyCount > 0 && (
-                                                                        <span className="px-2 py-1 text-xs font-semibold rounded-full bg-orange-100 text-orange-800" title={`${copyCount} copy attempts`}>
-                                                                            📋 Copy ({copyCount})
-                                                                        </span>
-                                                                    )}
-                                                                    {(attempt.exit_count || 0) > exam.max_exits && (
-                                                                        <span className="px-2 py-1 text-xs font-semibold rounded-full bg-yellow-100 text-yellow-800" title="Excessive exits">
-                                                                            🚪 Exits
-                                                                        </span>
-                                                                    )}
-                                                                    {(attempt.window_switches || 0) > 3 && (
-                                                                        <span className="px-2 py-1 text-xs font-semibold rounded-full bg-purple-100 text-purple-800" title={`${attempt.window_switches} window switches`}>
-                                                                            🔄 Switches
-                                                                        </span>
-                                                                    )}
-                                                                    {!hasViolations && (
-                                                                        <span className="text-gray-400 text-xs">✓ Clean</span>
-                                                                    )}
-                                                                </>
-                                                            )
-                                                        })()}
+                                                    {hasViolations ? (
+                                                        <button
+                                                            onClick={() => setSelectedAttemptForViolations(attempt)}
+                                                            className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-red-50 text-red-600 text-xs font-medium border border-red-100 hover:bg-red-100 hover:border-red-200 transition-colors"
+                                                        >
+                                                            <AlertTriangle className="w-3 h-3" />
+                                                            {totalViolations} Flags
+                                                        </button>
+                                                    ) : (
+                                                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-gray-50 text-gray-600 text-xs font-medium border border-gray-100">
+                                                            <CheckCircle className="w-3 h-3" />
+                                                            Clean
+                                                        </span>
+                                                    )}
+                                                </td>
+                                                <td className="px-6 py-4 text-sm text-gray-500">
+                                                    {attempt.time_spent_seconds ? Math.floor(attempt.time_spent_seconds / 60) + 'm' : '-'}
+                                                </td>
+                                                <td className="px-6 py-4 text-right">
+                                                    <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                        {!attempt.completed && (
+                                                            <button
+                                                                onClick={() => forceFinishAttempt(attempt.id)}
+                                                                className="p-1.5 text-orange-500 hover:bg-orange-50 rounded-md transition-colors"
+                                                                title="Force Finish (Mark as Completed)"
+                                                            >
+                                                                <StopCircle className="w-4 h-4" />
+                                                            </button>
+                                                        )}
+                                                        <button
+                                                            onClick={() => deleteAttempt(attempt.id)}
+                                                            className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors"
+                                                            title="Delete Attempt"
+                                                        >
+                                                            <Trash2 className="w-4 h-4" />
+                                                        </button>
+                                                        {attempt.completed && (
+                                                            <Link href={`/admin/attempt/${attempt.id}`} className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-colors">
+                                                                <ChevronRight className="w-4 h-4" />
+                                                            </Link>
+                                                        )}
                                                     </div>
                                                 </td>
-                                                <td className="px-6 py-4 whitespace-nowrap">
-                                                    {attempt.time_spent_seconds ? (
-                                                        <span>{Math.floor(attempt.time_spent_seconds / 60)} min</span>
-                                                    ) : (
-                                                        <span className="text-gray-400">-</span>
-                                                    )}
-                                                </td>
-                                                <td className="px-6 py-4 whitespace-nowrap">
-                                                    <span className={attempt.exit_count > 0 ? 'text-red-600 font-semibold' : 'text-gray-500'}>
-                                                        {attempt.exit_count}
-                                                    </span>
-                                                </td>
-                                                <td className="px-6 py-4 whitespace-nowrap">
-                                                    <span className={(attempt.window_switches || 0) > 0 ? 'text-orange-600 font-semibold' : 'text-gray-500'}>
-                                                        {attempt.window_switches || 0}
-                                                    </span>
-                                                </td>
-                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                                                    {new Date(attempt.started_at).toLocaleString()}
-                                                </td>
-                                                <td className="px-6 py-4 whitespace-nowrap">
-                                                    {attempt.completed && (
-                                                        <Link
-                                                            href={`/admin/attempt/${attempt.id}`}
-                                                            className="text-blue-600 hover:text-blue-700 font-medium text-sm"
-                                                        >
-                                                            View Details
-                                                        </Link>
-                                                    )}
-                                                    <button
-                                                        onClick={() => deleteAttempt(attempt.id)}
-                                                        className="ml-4 text-red-600 hover:text-red-800"
-                                                        title="Delete attempt"
-                                                    >
-                                                        <Trash2 className="w-4 h-4" />
-                                                    </button>
-                                                </td>
                                             </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
+                                        )
+                                    })
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                ) : (
+                    // Analytics Dashboard
+                    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                        {/* 1. High-Level Insights */}
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
+                                <h3 className="text-sm font-medium text-gray-500 uppercase tracking-wider mb-4">Score Distribution</h3>
+                                <div className="h-40 flex items-end justify-between gap-2">
+                                    {(() => {
+                                        const ranges = [0, 20, 40, 60, 80, 100];
+                                        const scores = attempts.filter(a => a.completed).map(a => a.score || 0);
+                                        const counts = [0, 0, 0, 0, 0];
+                                        scores.forEach(s => {
+                                            const idx = Math.min(Math.floor(s / 20), 4);
+                                            counts[idx]++;
+                                        });
+                                        const max = Math.max(...counts, 1);
+
+                                        return counts.map((count, i) => (
+                                            <div key={i} className="flex flex-col items-center gap-2 flex-1 group">
+                                                <div className="relative w-full flex items-end justify-center h-32 bg-gray-50 rounded-lg overflow-hidden">
+                                                    <div
+                                                        className={`w-full transition-all duration-1000 ${i === 4 ? 'bg-green-500' : i === 3 ? 'bg-blue-500' : 'bg-gray-400'}`}
+                                                        style={{ height: `${(count / max) * 100}%`, opacity: count > 0 ? 1 : 0.1 }}
+                                                    />
+                                                    <div className="absolute top-2 font-bold text-xs text-gray-700 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                        {count}
+                                                    </div>
+                                                </div>
+                                                <span className="text-[10px] text-gray-400 font-medium">{ranges[i]}-{ranges[i + 1]}</span>
+                                            </div>
+                                        ))
+                                    })()}
+                                </div>
                             </div>
-                        )}
+
+                            <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
+                                <h3 className="text-sm font-medium text-gray-500 uppercase tracking-wider mb-4">Time Efficiency</h3>
+                                <div className="space-y-6">
+                                    {(() => {
+                                        const completed = attempts.filter(a => a.completed && a.time_spent_seconds)
+                                        if (completed.length === 0) return <p className="text-sm text-gray-400">No completed attempts yet.</p>
+
+                                        const avgTime = completed.reduce((sum, a) => sum + (a.time_spent_seconds || 0), 0) / completed.length
+                                        const totalDuration = (exam.duration_minutes || 60) * 60
+                                        const percentageUsed = Math.min((avgTime / totalDuration) * 100, 100)
+
+                                        const fastFinishers = completed.filter(a => (a.time_spent_seconds || 0) < totalDuration * 0.5).length
+                                        const timeCrunched = completed.filter(a => (a.time_spent_seconds || 0) > totalDuration * 0.9).length
+
+                                        return (
+                                            <>
+                                                <div>
+                                                    <div className="flex justify-between items-end mb-2">
+                                                        <div>
+                                                            <div className="text-2xl font-bold text-gray-900">{Math.floor(avgTime / 60)}m {Math.round(avgTime % 60)}s</div>
+                                                            <div className="text-xs text-gray-500">Avg. Completion Time</div>
+                                                        </div>
+                                                        <div className="text-right">
+                                                            <div className="text-xs font-bold text-gray-900">{exam.duration_minutes}m</div>
+                                                            <div className="text-xs text-gray-400">Limit</div>
+                                                        </div>
+                                                    </div>
+                                                    <div className="h-3 w-full bg-gray-100 rounded-full overflow-hidden">
+                                                        <div
+                                                            className={`h-full rounded-full ${percentageUsed > 90 ? 'bg-red-500' : percentageUsed > 75 ? 'bg-orange-500' : 'bg-green-500'}`}
+                                                            style={{ width: `${percentageUsed}%` }}
+                                                        />
+                                                    </div>
+                                                </div>
+
+                                                <div className="grid grid-cols-2 gap-4 mt-4">
+                                                    <div className="bg-green-50 p-3 rounded-lg border border-green-100">
+                                                        <div className="text-lg font-bold text-green-700">{fastFinishers}</div>
+                                                        <div className="text-[10px] text-green-600 font-medium uppercase">Fast Finishers</div>
+                                                        <div className="text-[10px] text-green-500">(&lt; 50% time)</div>
+                                                    </div>
+                                                    <div className="bg-orange-50 p-3 rounded-lg border border-orange-100">
+                                                        <div className="text-lg font-bold text-orange-700">{timeCrunched}</div>
+                                                        <div className="text-[10px] text-orange-600 font-medium uppercase">Using Full Time</div>
+                                                        <div className="text-[10px] text-orange-500">(&gt; 90% time)</div>
+                                                    </div>
+                                                </div>
+                                            </>
+                                        )
+                                    })()}
+                                </div>
+                            </div>
+
+                            <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm flex flex-col justify-center items-center text-center relative overflow-hidden">
+                                <h3 className="text-sm font-medium text-gray-500 uppercase tracking-wider mb-2 absolute top-6 left-6">Pass Rate</h3>
+                                <div className="relative w-32 h-32 mt-4">
+                                    {/* Simple Pure CSS Donut Chart */}
+                                    {/* Background Circle */}
+                                    <svg viewBox="0 0 36 36" className="w-full h-full transform -rotate-90">
+                                        <path
+                                            className="text-gray-100"
+                                            d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                                            fill="none"
+                                            stroke="currentColor"
+                                            strokeWidth="3"
+                                        />
+                                        {/* Progress Circle */}
+                                        <path
+                                            className={`${passRate >= 50 ? 'text-green-500' : 'text-orange-500'} drop-shadow-sm transition-all duration-1000 ease-out`}
+                                            strokeDasharray={`${passRate}, 100`}
+                                            d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                                            fill="none"
+                                            stroke="currentColor"
+                                            strokeWidth="3"
+                                            strokeLinecap="round"
+                                        />
+                                    </svg>
+                                    <div className="absolute inset-0 flex items-center justify-center flex-col">
+                                        <span className="text-3xl font-bold text-gray-900">{Math.round(passRate)}%</span>
+                                    </div>
+                                </div>
+                                <div className="mt-4 text-sm text-gray-500">
+                                    <span className="font-semibold text-gray-900">{passedAttempts.length}</span> passed out of <span className="font-semibold text-gray-900">{completedAttempts.length}</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* 2. Detailed Question Analysis */}
+                        <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+                            <div className="px-6 py-4 border-b border-gray-100 bg-gray-50 flex justify-between items-center">
+                                <h3 className="font-semibold text-gray-900">Question Difficulty Breakdown</h3>
+                            </div>
+                            <div className="p-6">
+                                <div className="space-y-6">
+                                    {questions.map((q, idx) => {
+                                        const qAnswers = answers.filter(a => a.question_id === q.id);
+                                        const count = qAnswers.length;
+                                        const correct = qAnswers.filter(a => a.is_correct).length;
+                                        const rate = count > 0 ? (correct / count) * 100 : 0;
+
+                                        // Determine difficulty visual
+                                        let colorClass = 'bg-green-500';
+                                        let difficultyLabel = 'Easy';
+                                        if (rate < 40) { colorClass = 'bg-red-500'; difficultyLabel = 'Hard'; }
+                                        else if (rate < 70) { colorClass = 'bg-yellow-500'; difficultyLabel = 'Medium'; }
+
+                                        return (
+                                            <div key={idx} className="group">
+                                                <div className="flex justify-between items-start mb-2">
+                                                    <div className="flex-1 pr-4">
+                                                        <div className="flex items-center gap-2 mb-1">
+                                                            <span className="text-xs font-mono text-gray-400">Q{idx + 1}</span>
+                                                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider text-white ${colorClass}`}>
+                                                                {difficultyLabel}
+                                                            </span>
+                                                        </div>
+                                                        <p className="text-sm font-medium text-gray-900 line-clamp-2" title={q.question_text}>
+                                                            {q.question_text}
+                                                        </p>
+                                                    </div>
+                                                    <div className="text-right min-w-[80px]">
+                                                        <span className="text-lg font-bold text-gray-900">{Math.round(rate)}%</span>
+                                                        <p className="text-xs text-gray-500">Correct</p>
+                                                    </div>
+                                                </div>
+                                                {/* Bar */}
+                                                <div className="h-2 w-full bg-gray-100 rounded-full overflow-hidden relative">
+                                                    <div
+                                                        className={`h-full rounded-full transition-all duration-500 ${colorClass}`}
+                                                        style={{ width: `${rate}%` }}
+                                                    />
+                                                </div>
+                                                <div className="mt-1 flex justify-between text-xs text-gray-400">
+                                                    <span>{correct} correct</span>
+                                                    <span>{count} attempts</span>
+                                                </div>
+                                            </div>
+                                        )
+                                    })}
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 )}
             </main>
 
-            <style jsx>{`
-                @keyframes blob {
-                    0%, 100% { transform: translateY(0px); }
-                    50% { transform: translateY(-20px); }
-                }
-                .animate-blob {
-                    animation: blob 7s infinite;
-                }
-                .animation-delay-2000 {
-                    animation-delay: 2s;
-                }
-                .animation-delay-4000 {
-                    animation-delay: 4s;
-                }
-            `}</style>
+            {/* Violation Modal */}
+            {selectedAttemptForViolations && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
+                    <div className="bg-white rounded-2xl shadow-xl border border-gray-200 w-full max-w-2xl max-h-[80vh] overflow-hidden flex flex-col">
+                        <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+                            <div className="flex items-center gap-3">
+                                <div className="p-2 bg-red-100 rounded-lg">
+                                    <AlertTriangle className="w-5 h-5 text-red-600" />
+                                </div>
+                                <div>
+                                    <h3 className="font-bold text-gray-900">Security Report</h3>
+                                    <p className="text-xs text-gray-500">{selectedAttemptForViolations.student_name}</p>
+                                </div>
+                            </div>
+                            <button onClick={() => setSelectedAttemptForViolations(null)} className="p-2 hover:bg-gray-200 rounded-lg text-gray-400 hover:text-gray-600">
+                                <XCircle className="w-5 h-5" />
+                            </button>
+                        </div>
+
+                        <div className="p-6 overflow-y-auto">
+                            <div className="flex gap-4 mb-6">
+                                <div className="flex-1 p-3 bg-gray-50 rounded-xl border border-gray-100 text-center">
+                                    <div className="text-2xl font-bold text-gray-900">{selectedAttemptForViolations.exit_count || 0}</div>
+                                    <div className="text-xs text-gray-500 font-medium uppercase tracking-wide">Exits</div>
+                                </div>
+                                <div className="flex-1 p-3 bg-gray-50 rounded-xl border border-gray-100 text-center">
+                                    <div className="text-2xl font-bold text-gray-900">{selectedAttemptForViolations.window_switches || 0}</div>
+                                    <div className="text-xs text-gray-500 font-medium uppercase tracking-wide">Switches</div>
+                                </div>
+                            </div>
+
+                            <div className="space-y-3">
+                                <h4 className="text-sm font-semibold text-gray-900 border-b border-gray-100 pb-2 mb-3">Timeline</h4>
+                                {(selectedAttemptForViolations.suspicious_activities?.length > 0) ? (
+                                    selectedAttemptForViolations.suspicious_activities.map((act: any, idx: number) => (
+                                        <div key={idx} className="flex gap-3 text-sm">
+                                            <div className="mt-1 min-w-[4px] w-1 bg-red-200 rounded-full" />
+                                            <div className="flex-1 pb-3">
+                                                <div className="flex justify-between">
+                                                    <span className="font-medium text-gray-900">
+                                                        {act.type === 'devtools_detected' ? 'DevTools Detected' :
+                                                            act.type === 'copy_attempt' ? 'Content Copy (Right Click)' : 'Suspicious Activity'}
+                                                    </span>
+                                                    <span className="text-gray-400 text-xs font-mono">{new Date(act.timestamp).toLocaleTimeString()}</span>
+                                                </div>
+                                                <p className="text-gray-500 text-xs mt-0.5">{act.details}</p>
+                                            </div>
+                                        </div>
+                                    ))
+                                ) : (
+                                    <p className="text-sm text-gray-500 italic text-center py-4">No specific timeline events logged.</p>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {exam && (
+                <>
+                    <ExamPreviewModal
+                        isOpen={showPreview}
+                        onClose={() => setShowPreview(false)}
+                        examTitle={exam.title}
+                        durationMinutes={exam.duration_minutes}
+                        questions={questions || []}
+                        settings={{
+                            shuffleQuestions: exam.shuffle_questions,
+                            shuffleOptions: exam.shuffle_options,
+                            showResults: exam.show_results
+                        }}
+                    />
+                    <ShareExamModal
+                        isOpen={showShare}
+                        onClose={() => setShowShare(false)}
+                        examData={{
+                            id: exam.id,
+                            title: exam.title,
+                            duration: exam.duration_minutes,
+                            questionsCount: questions?.length || 0,
+                            accessCode: exam.access_code
+                        }}
+                    />
+                </>
+            )}
         </div>
     )
 }
 
-function StatCard({ icon, title, value }: {
-    icon: React.ReactNode
-    title: string
-    value: string | number
-}) {
+function StatBox({ label, value, sub, highlight }: { label: string, value: string, sub?: string, highlight?: boolean }) {
     return (
-        <div className="bg-white/80 backdrop-blur-xl rounded-2xl shadow-2xl shadow-black/10 border border-gray-200/60 p-6 hover:shadow-xl transition-all duration-300">
-            <div className="flex items-center gap-4">
-                <div className="p-3 bg-gray-50 rounded-xl">
-                    {icon}
-                </div>
-                <div>
-                    <p className="text-gray-600 text-sm font-medium">{title}</p>
-                    <p className="text-2xl font-bold text-gray-900">{value}</p>
-                </div>
-            </div>
-        </div>
-    )
-}
-
-function InfoItem({ label, value }: { label: string; value: string | number | boolean }) {
-    return (
-        <div>
-            <p className="text-sm text-gray-600">{label}</p>
-            <p className="font-semibold text-gray-900">{String(value)}</p>
+        <div className={`p-4 rounded-xl border ${highlight ? 'bg-orange-50 border-orange-100' : 'bg-gray-50 border-gray-100'}`}>
+            <p className={`text-xs font-medium uppercase tracking-wider mb-1 ${highlight ? 'text-orange-600' : 'text-gray-500'}`}>{label}</p>
+            <p className={`text-2xl font-bold ${highlight ? 'text-orange-900' : 'text-gray-900'}`}>{value}</p>
+            {sub && <p className="text-xs text-gray-400 mt-1">{sub}</p>}
         </div>
     )
 }

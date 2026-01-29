@@ -1499,9 +1499,7 @@ export default function StudentExamPage() {
                             </div>
 
                             <button
-                                onClick={() => {
-                                    startExam()
-                                }}
+                                onClick={() => startExam()}
                                 disabled={!isOnline || !studentName.trim()}
                                 className="w-full bg-gray-900 text-white py-2.5 rounded-lg font-medium hover:bg-gray-800 transition disabled:opacity-50 disabled:cursor-not-allowed"
                             >

@@ -1,0 +1,18 @@
+{
+  "status": "commited",
+  "type": "frontend",
+  "scope": "codebase",
+  "localEndpoint": "http://localhost:3000",
+  "loginUser": "1yousefsaleh@gmail.com",
+  "loginPassword": "$*Yousef_0_Saleh*$",
+  "executionArgs": {
+    "projectName": "exams_system_itslab",
+    "projectPath": "D:\\Projects\\exams_system_itslab",
+    "testIds": [],
+    "additionalInstruction": "",
+    "envs": {
+      "API_KEY": "sk-user-jgMEuqQEvc2qMY5MSk2vIdQGNGrmCVnnkSNVeOndpk30WJftp7LRsyuD_hirt3_Xg5Q46CpkShn5-Shpr4N_of_rzQlnBgvYM6rFhrUNFfPHCzCVRPyelZnu0Fqz4POMufM"
+    }
+  },
+  "proxy": "http://cc0d9c6b-252f-41ec-8f89-372a0aa8ee41:XrI2uS2yEnR47us6FGmq6FH1GdPVaTTh@tun.testsprite.com:8080"
+}

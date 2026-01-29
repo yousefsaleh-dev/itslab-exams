@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { getSession } from '@/lib/auth'
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
 
 interface UpdateExamRequest {
-    adminId: string
     title: string
     description: string
     duration_minutes: number
@@ -40,13 +40,23 @@ export async function POST(
     })
 
     try {
+        // SECURITY: Verify session
+        const session = await getSession()
+        if (!session || !session.id) {
+            return NextResponse.json(
+                { error: 'Unauthorized: Please login first' },
+                { status: 401 }
+            )
+        }
+
         const { id: examId } = await params
         const body: UpdateExamRequest = await request.json()
+        const adminId = session.id
 
         // Validate required fields
-        if (!body.adminId || !body.title?.trim()) {
+        if (!body.title?.trim()) {
             return NextResponse.json(
-                { error: 'Admin ID and title are required' },
+                { error: 'Exam title is required' },
                 { status: 400 }
             )
         }
@@ -72,7 +82,7 @@ export async function POST(
             )
         }
 
-        if (existingExam.admin_id !== body.adminId) {
+        if (existingExam.admin_id !== adminId) {
             return NextResponse.json(
                 { error: 'Unauthorized - you do not own this exam' },
                 { status: 403 }

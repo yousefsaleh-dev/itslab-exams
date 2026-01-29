@@ -1,9 +1,9 @@
--- Row Level Security (RLS) Policies - SAFE VERSION
--- This script will DROP existing policies first, then recreate them
--- Apply in Supabase SQL Editor
+-- Row Level Security (RLS) Policies - SECURED VERSION
+-- This script will DROP existing policies first, then recreate them with STRICT security
+-- Apply this in Supabase SQL Editor to fix the vulnerability
 
 -- ========================================
--- STEP 1: Drop ALL existing policies (safe - won't error if not exist)
+-- STEP 1: Drop ALL existing policies
 -- ========================================
 
 DROP POLICY IF EXISTS "Block direct admin access" ON admins;
@@ -44,52 +44,50 @@ ALTER TABLE exams ENABLE ROW LEVEL SECURITY;
 
 
 -- ========================================
--- STEP 3: Create NEW policies
+-- STEP 3: Create NEW STRICT policies
 -- ========================================
 
--- ADMINS TABLE (CRITICAL!)
+-- 1. ADMINS TABLE
 CREATE POLICY "Block direct admin access"
 ON admins FOR ALL
 TO anon
 USING (false)
 WITH CHECK (false);
 
--- PASSWORD_RESET_TOKENS TABLE
+-- 2. PASSWORD_RESET_TOKENS
 CREATE POLICY "Block token modifications"
-ON password_reset_tokens FOR INSERT
+ON password_reset_tokens FOR ALL
 TO anon
-WITH CHECK (false);
+USING (false) WITH CHECK (false);
 
-CREATE POLICY "Block token updates"
-ON password_reset_tokens FOR UPDATE
-TO anon
-USING (false);
-
-CREATE POLICY "Block token deletion"
-ON password_reset_tokens FOR DELETE
-TO anon
-USING (false);
-
-CREATE POLICY "Block token reading"
-ON password_reset_tokens FOR SELECT
-TO anon
-USING (false);
-
--- OPTIONS TABLE - Allow reading for admins/instructors viewing attempts
--- Students shouldn't see is_correct during exam, but admins need to see it for review
+-- 3. OPTIONS TABLE (CRITICAL SECURITY FIX)
+-- ⛔ DENY: Anon users cannot READ options directly (This hides is_correct)
+-- ✅ ALLOW: Authenticated users (if any) or Service Role (API)
 CREATE POLICY "Allow reading options"
 ON options FOR SELECT
-TO authenticated, anon
+TO authenticated -- Only Authenticated Admins (if applicable) can read direct
 USING (true);
 
--- ⚠️ SECURITY: Write operations on options should ONLY happen via service_role from API
--- NO policies for INSERT/UPDATE/DELETE - forces use of API routes with proper validation
+-- 4. QUESTIONS TABLE (CRITICAL SECURITY FIX)
+-- ⛔ DENY: Anon users cannot dump the question bank
+CREATE POLICY "Read questions"
+ON questions FOR SELECT
+TO authenticated
+USING (true);
 
--- STUDENT ATTEMPTS
+-- 5. EXAMS TABLE (CRITICAL SECURITY FIX)
+-- ⛔ DENY: Anon users cannot list all exams
+CREATE POLICY "Read exams"  
+ON exams FOR SELECT
+TO authenticated
+USING (true);
+
+-- 6. STUDENT ATTEMPTS (Allowed for Student Experience)
+-- Students need to read/write their *own* attempts for state persistence
 CREATE POLICY "Read own attempts"
 ON student_attempts FOR SELECT
 TO anon
-USING (true);
+USING (true); -- Ideally scope to session/cookie ID, but currently open to 'anon' for Resume logic
 
 CREATE POLICY "Insert own attempts"
 ON student_attempts FOR INSERT
@@ -107,7 +105,7 @@ ON student_attempts FOR DELETE
 TO anon
 USING (false);
 
--- STUDENT ANSWERS
+-- 7. STUDENT ANSWERS
 CREATE POLICY "Read own answers"
 ON student_answers FOR SELECT
 TO anon
@@ -134,36 +132,9 @@ ON student_answers FOR DELETE
 TO anon
 USING (false);
 
--- QUESTIONS & EXAMS
--- Students can READ
-CREATE POLICY "Read questions"
-ON questions FOR SELECT
-TO anon
-USING (true);
-
-CREATE POLICY "Read exams"  
-ON exams FOR SELECT
-TO anon
-USING (true);
-
--- ⚠️ SECURITY FIX: Removed dangerous policies that allowed anon users to modify exams/questions
--- All write operations (INSERT/UPDATE/DELETE) MUST go through service_role from API endpoints
--- This prevents:
--- 1. Anonymous users from creating/editing/deleting exams
--- 2. Anonymous users from modifying questions
--- 3. Students from tampering with exam data
--- 
--- Admin operations are handled server-side via:
--- - /api/exam/[id]/details (uses service_role)
--- - /api/exam/clone (uses service_role)
--- - ExamForm component (uses service_role via supabase client)
-
 -- ========================================
--- VERIFICATION
+-- NOTES
 -- ========================================
-
--- Run this to verify RLS is enabled:
--- SELECT tablename, rowsecurity FROM pg_tables WHERE schemaname = 'public';
-
--- Should show rowsecurity = TRUE for all tables above
-
+-- The Admin Dashboard now uses API Routes (/api/admin/...) which run with
+-- the SERVICE_ROLE_KEY. This bypasses RLS, so Admins still have full access.
+-- Students are blocked from reading Options/Questions directly.

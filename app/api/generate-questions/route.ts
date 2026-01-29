@@ -1,8 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server'
+import Groq from 'groq-sdk'
+import { getSession } from '@/lib/auth'
 
 export async function POST(request: NextRequest) {
     try {
-        const { prompt } = await request.json()
+        // SECURITY: Verify session
+        const session = await getSession()
+        if (!session || !session.id) {
+            return NextResponse.json(
+                { error: 'Unauthorized: Please login first' },
+                { status: 401 }
+            )
+        }
+
+        const { prompt, count = 5, difficulty = 'medium', type = 'mixed', existingQuestions = [] } = await request.json()
 
         if (!prompt || typeof prompt !== 'string') {
             return NextResponse.json(
@@ -11,147 +22,139 @@ export async function POST(request: NextRequest) {
             )
         }
 
-        const apiKey = process.env.HUGGINGFACE_API_KEY
+        const apiKey = process.env.GROQ_API_KEY
         if (!apiKey) {
-            // console.error('HUGGINGFACE_API_KEY not found in environment variables')
             return NextResponse.json(
-                { error: 'AI service not configured. Please add HUGGINGFACE_API_KEY to .env.local' },
+                { error: 'GROQ_API_KEY not found in environment variables' },
                 { status: 500 }
             )
         }
 
-        const fullPrompt = `Generate exam questions about: "${prompt}"
+        const groq = new Groq({
+            apiKey: apiKey
+        });
 
-Return ONLY a valid, raw JSON array (no markdown code blocks, no comments, no explanations) with this structure:
-[
-  {
-    "question": "Question text here?",
-    "options": ["Option 1", "Option 2", "Option 3", "Option 4"],
-    "correctIndex": 0,
-    "points": 1
-  }
-]
+        // Construct System Prompt
+        const systemPrompt = `You are an expert exam question generator. Your task is to generate unique, high-quality exam questions in valid JSON format.
 
-Ensure:
-1. Valid JSON syntax (quotes are escaped properly).
-2. "options" must be an array of strings.
-3. "correctIndex" is a number 0-3.
-4. Generate 5-8 questions.`
+RULES:
+1. Return ONLY a pure JSON array of objects. No markdown, no comments, no explanations.
+2. The JSON structure for each question must be:
+   {
+     "question": "Question text",
+     "options": ["Option 1", "Option 2", "Option 3", "Option 4"],
+     "correctIndex": 0, // 0-3
+     "points": 1
+   }
+3. Generate EXACTLY the requested number of questions.
+4. ALL questions must be UNIQUE. Do not repeat concepts or questions.
+5. "options" must be an array of usually 4 strings.
+6. "correctIndex" must be a valid index (0 to length-1).`
 
-        // Using Mistral model via Hugging Face Router (OpenAI Compatible)
-        const response = await fetch(
-            'https://router.huggingface.co/v1/chat/completions',
-            {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${apiKey}`,
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    model: 'Qwen/Qwen2.5-7B-Instruct',
-                    messages: [
-                        { role: 'user', content: fullPrompt }
-                    ],
-                    max_tokens: 1500,
-                    temperature: 0.7
-                })
-            }
-        )
-
-        if (!response.ok) {
-            const errorText = await response.text()
-            // console.error('Hugging Face API Error:', errorText)
-
-            // Check if model is loading
-            if (errorText.includes('loading') || errorText.includes('currently loading')) {
-                return NextResponse.json(
-                    { error: 'AI model is loading. Please wait 30 seconds and try again.' },
-                    { status: 503 }
-                )
-            }
-
-            return NextResponse.json(
-                { error: `AI generation failed: ${errorText}` },
-                { status: response.status }
-            )
+        // Handle existing questions to avoid duplicates
+        let avoidContext = '';
+        if (Array.isArray(existingQuestions) && existingQuestions.length > 0) {
+            // Limit to last 30 questions to save context window and avoid token limits
+            const recentQuestions = existingQuestions.slice(-30);
+            avoidContext = `\n\nCRITICAL: DO NOT GENERATE questions that are similar or identical to the following:\n${recentQuestions.map((q: string, i: number) => `${i + 1}. ${q}`).join('\n')}`;
         }
 
-        const data = await response.json()
+        // Construct User Prompt
+        const userPrompt = `Topic: "${prompt}"
+Number of Questions: ${count}
+Difficulty: ${difficulty}
+Question Type: ${type === 'conceptual' ? 'Theoretical' : type === 'practical' ? 'Practical/Scenario-based' : 'Mixed'}
+${avoidContext}
 
-        if (!data.choices || !Array.isArray(data.choices) || data.choices.length === 0) {
-            // console.error('Invalid response format:', data)
-            return NextResponse.json(
-                { error: 'Invalid AI response' },
-                { status: 500 }
-            )
+Generate ${count} questions now.`
+
+        const completion = await groq.chat.completions.create({
+            messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: userPrompt }
+            ],
+            model: 'llama-3.3-70b-versatile',
+            temperature: 0.3, // Lower temperature for more deterministic and consistent output
+            max_tokens: 4096,
+            response_format: { type: 'json_object' }
+        });
+
+        const content = completion.choices[0]?.message?.content || ''
+
+        if (!content) {
+            throw new Error('No content received from AI')
         }
 
-        let content = data.choices[0].message?.content || ''
-
-        // Clean response
-        content = content.trim()
-        content = content.replace(/```json\n?/g, '')
-        content = content.replace(/```\n?/g, '')
-
-        // Find JSON array more robustly
-        const firstBracket = content.indexOf('[')
-        const lastBracket = content.lastIndexOf(']')
-
-        if (firstBracket === -1 || lastBracket === -1 || firstBracket >= lastBracket) {
-            // console.error('No JSON array found. Response:', content)
-            return NextResponse.json(
-                { error: 'Failed to parse AI response. Please try again.' },
-                { status: 500 }
-            )
-        }
-
-        content = content.substring(firstBracket, lastBracket + 1)
-
-        let questions
+        // Parse JSON
+        let parsedData;
         try {
-            questions = JSON.parse(content)
-        } catch (parseError) {
-            // console.error('JSON parse error:', parseError)
-            return NextResponse.json(
-                { error: 'Failed to parse questions. Please try again.' },
-                { status: 500 }
-            )
+            // Attempt to find JSON array or object
+            const jsonStr = content.replace(/```json\n?|```/g, '').trim();
+            parsedData = JSON.parse(jsonStr);
+        } catch (e) {
+            console.error('JSON Parse Error:', e, content);
+            throw new Error('Failed to parse AI response');
         }
+
+        // Handle if response is wrapped in an object or just an array
+        let questions = Array.isArray(parsedData) ? parsedData : (parsedData.questions || parsedData.data || []);
 
         if (!Array.isArray(questions) || questions.length === 0) {
-            return NextResponse.json(
-                { error: 'No questions generated. Please try again.' },
-                { status: 500 }
-            )
+            // Fallback: simpler parsing if structure didn't match
+            if (typeof parsedData === 'object') {
+                // Try to find any array value
+                const values = Object.values(parsedData);
+                const arrayVal = values.find(v => Array.isArray(v));
+                if (arrayVal) questions = arrayVal as any[];
+            }
         }
 
-        // Validate questions
-        const validQuestions = questions
-            .filter(q =>
+        if (!questions || questions.length === 0) {
+            throw new Error('No questions found in AI response');
+        }
+
+        // Deduplication & Validation
+        const uniqueQuestionsMap = new Map();
+
+        // Prepare strict global exclusion set
+        const globalExistingSet = new Set(
+            (Array.isArray(existingQuestions) ? existingQuestions : [])
+                .map((q: any) => typeof q === 'string' ? q.trim().toLowerCase() : '')
+        );
+
+        questions.forEach((q: any) => {
+            if (
                 q.question &&
                 Array.isArray(q.options) &&
                 q.options.length >= 2 &&
-                typeof q.correctIndex === 'number' &&
-                q.correctIndex >= 0 &&
-                q.correctIndex < q.options.length
-            )
-            .map(q => ({
-                question: q.question,
-                options: q.options,
-                correctIndex: q.correctIndex,
-                points: q.points || 1
-            }))
+                typeof q.correctIndex === 'number'
+            ) {
+                const normalizedText = q.question.trim().toLowerCase();
 
-        if (validQuestions.length === 0) {
-            return NextResponse.json(
-                { error: 'Generated questions are invalid. Please try again.' },
-                { status: 500 }
-            )
+                // 1. Check if it duplicates a question in the current batch
+                // 2. Check if it duplicates a question from existing list (Global Deduplication)
+                if (!uniqueQuestionsMap.has(normalizedText) && !globalExistingSet.has(normalizedText)) {
+                    uniqueQuestionsMap.set(normalizedText, {
+                        question: q.question,
+                        options: q.options,
+                        correctIndex: q.correctIndex,
+                        points: q.points || 1
+                    });
+                }
+            }
+        });
+
+        let validQuestions = Array.from(uniqueQuestionsMap.values());
+
+        // Ensure we don't exceed requested count (though rare with strict prompt)
+        if (validQuestions.length > count) {
+            validQuestions = validQuestions.slice(0, count);
         }
 
         return NextResponse.json({ questions: validQuestions })
+
     } catch (error: any) {
-        // console.error('AI Generation Error:', error)
+        // console.error('Groq Generation Error:', error)
         return NextResponse.json(
             { error: error.message || 'Failed to generate questions' },
             { status: 500 }

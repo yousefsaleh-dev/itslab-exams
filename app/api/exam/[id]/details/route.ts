@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { getSession } from '@/lib/auth'
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
@@ -17,33 +18,18 @@ export async function GET(
     })
 
     try {
+        // SECURITY: Verify session
+        const session = await getSession()
+        if (!session || !session.id) {
+            return NextResponse.json(
+                { error: 'Unauthorized: Please login first' },
+                { status: 401 }
+            )
+        }
+
         // Next.js 15+ requires awaiting params
         const { id: examId } = await params
-
-        // SECURITY: Extract and validate admin ID from query params
-        const { searchParams } = new URL(request.url)
-        const adminId = searchParams.get('adminId')
-
-        if (!adminId) {
-            return NextResponse.json(
-                { error: 'Admin authentication required' },
-                { status: 401 }
-            )
-        }
-
-        // Verify admin exists
-        const { data: admin, error: adminError } = await supabase
-            .from('admins')
-            .select('id')
-            .eq('id', adminId)
-            .single()
-
-        if (adminError || !admin) {
-            return NextResponse.json(
-                { error: 'Invalid admin credentials' },
-                { status: 401 }
-            )
-        }
+        const adminId = session.id
 
         // Fetch Exam
         const { data: examData, error: examError } = await supabase
@@ -91,7 +77,7 @@ export async function GET(
         })
 
     } catch (error) {
-        // console.error('Get exam API error:', error)
+        console.error('Get exam API error:', error)
         return NextResponse.json(
             { error: 'Internal server error' },
             { status: 500 }

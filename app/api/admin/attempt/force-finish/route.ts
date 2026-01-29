@@ -66,38 +66,35 @@ export async function POST(request: NextRequest) {
         // SECURITY: Verify admin owns the exam this attempt belongs to
         if (exam.admin_id !== adminId) {
             return NextResponse.json(
-                { error: 'You do not have permission to delete this attempt' },
+                { error: 'You do not have permission to modify this attempt' },
                 { status: 403 }
             )
         }
 
-        // Delete associated answers first (cascade should handle this, but being explicit)
-        await supabase
-            .from('student_answers')
-            .delete()
-            .eq('attempt_id', attemptId)
-
-        // Delete the attempt
-        const { error: deleteError } = await supabase
+        // Force finish the attempt
+        const { error: updateError } = await supabase
             .from('student_attempts')
-            .delete()
+            .update({
+                completed: true,
+                completed_at: new Date().toISOString()
+            })
             .eq('id', attemptId)
 
-        if (deleteError) {
-            console.error('Delete attempt error:', deleteError)
+        if (updateError) {
+            console.error('Force finish error:', updateError)
             return NextResponse.json(
-                { error: 'Failed to delete attempt' },
+                { error: 'Failed to update attempt' },
                 { status: 500 }
             )
         }
 
         return NextResponse.json({
             success: true,
-            message: 'Attempt deleted successfully'
+            message: 'Attempt marked as completed'
         })
 
     } catch (error) {
-        console.error('Delete attempt error:', error)
+        console.error('Force finish error:', error)
         return NextResponse.json(
             { error: 'Internal server error' },
             { status: 500 }

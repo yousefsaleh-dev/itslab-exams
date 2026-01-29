@@ -1,13 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { getSession } from '@/lib/auth'
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
-
-interface CloneExamRequest {
-    examId: string
-    adminId: string  // Required for authentication
-}
 
 export async function POST(request: NextRequest) {
     const supabase = createClient(supabaseUrl, supabaseServiceKey, {
@@ -18,8 +14,17 @@ export async function POST(request: NextRequest) {
     })
 
     try {
-        const body: CloneExamRequest = await request.json()
-        const { examId, adminId } = body
+        // SECURITY: Verify session
+        const session = await getSession()
+        if (!session || !session.id) {
+            return NextResponse.json(
+                { error: 'Unauthorized: Please login first' },
+                { status: 401 }
+            )
+        }
+
+        const body = await request.json()
+        const { examId } = body
 
         if (!examId) {
             return NextResponse.json(
@@ -28,27 +33,7 @@ export async function POST(request: NextRequest) {
             )
         }
 
-        // SECURITY: Require admin authentication
-        if (!adminId) {
-            return NextResponse.json(
-                { error: 'Admin authentication required' },
-                { status: 401 }
-            )
-        }
-
-        // Verify admin exists
-        const { data: admin, error: adminError } = await supabase
-            .from('admins')
-            .select('id')
-            .eq('id', adminId)
-            .single()
-
-        if (adminError || !admin) {
-            return NextResponse.json(
-                { error: 'Invalid admin credentials' },
-                { status: 401 }
-            )
-        }
+        const adminId = session.id
 
         // Fetch exam and questions with options
         const [examResult, questionsResult] = await Promise.all([

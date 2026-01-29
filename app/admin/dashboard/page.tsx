@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store'
 import { supabase, Exam } from '@/lib/supabase'
-import { Plus, FileText, Users, LogOut, Trash2, Copy, ExternalLink, TrendingUp, CheckCircle2, XCircle, Search } from 'lucide-react'
+import { Plus, FileText, Users, LogOut, Trash2, Copy, ExternalLink, TrendingUp, Search, Trophy, Link2 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import Link from 'next/link'
 
@@ -25,14 +25,14 @@ export default function AdminDashboard() {
 
     const fetchExams = async () => {
         try {
-            const { data, error } = await supabase
-                .from('exams')
-                .select('*')
-                .eq('admin_id', admin?.id)
-                .order('created_at', { ascending: false })
+            const response = await fetch(`/api/admin/exams?adminId=${admin?.id}`)
+            const data = await response.json()
 
-            if (error) throw error
-            setExams(data || [])
+            if (!data.success) {
+                throw new Error(data.error || 'Failed to load exams')
+            }
+
+            setExams(data.exams || [])
         } catch (error) {
             toast.error('Failed to load exams')
         } finally {
@@ -40,7 +40,12 @@ export default function AdminDashboard() {
         }
     }
 
-    const handleLogout = () => {
+    const handleLogout = async () => {
+        try {
+            await fetch('/api/admin/logout', { method: 'POST' })
+        } catch (error) {
+            console.error('Logout failed:', error)
+        }
         logout()
         router.push('/admin/login')
         toast.success('Logged out successfully')
@@ -50,14 +55,20 @@ export default function AdminDashboard() {
         if (!confirm('Are you sure you want to delete this exam? This action cannot be undone.')) return
 
         try {
-            // Use secure API endpoint with admin authentication
             const response = await fetch('/api/admin/exam/delete', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ examId, adminId: admin?.id })
+                body: JSON.stringify({ examId })
             })
 
             const data = await response.json()
+
+            if (response.status === 401) {
+                logout()
+                router.push('/admin/login')
+                toast.error('Session expired')
+                return
+            }
 
             if (!response.ok) {
                 throw new Error(data.error || 'Failed to delete exam')
@@ -80,14 +91,20 @@ export default function AdminDashboard() {
         if (!confirm('Do you want to clone this exam?')) return
 
         try {
-            // Use secure API endpoint with admin authentication
             const response = await fetch('/api/exam/clone', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ examId, adminId: admin?.id })
+                body: JSON.stringify({ examId })
             })
 
             const data = await response.json()
+
+            if (response.status === 401) {
+                logout()
+                router.push('/admin/login')
+                toast.error('Session expired')
+                return
+            }
 
             if (!response.ok) {
                 throw new Error(data.error || 'Failed to clone exam')
@@ -113,21 +130,26 @@ export default function AdminDashboard() {
     }
 
     return (
-        <div className="min-h-screen bg-gray-50">
+        <div className="min-h-screen bg-gray-50 text-gray-900 font-sans">
             {/* Header */}
-            <header className="bg-white/80 backdrop-blur-xl shadow-sm border-b border-gray-200/60 sticky top-0 z-20">
-                <div className="max-w-7xl mx-auto px-4 py-4 sm:px-6 lg:px-8">
-                    <div className="flex justify-between items-center">
-                        <div>
-                            <h1 className="text-2xl font-bold text-gray-900">Admin Dashboard</h1>
-                            <p className="text-gray-600">Welcome back, <span className="font-semibold">{admin?.name}</span></p>
+            <header className="bg-white border-b border-gray-200 sticky top-0 z-20">
+                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                        <div className="p-2 bg-black rounded-lg">
+                            <Trophy className="w-5 h-5 text-white" />
                         </div>
+                        <div>
+                            <h1 className="text-lg font-bold tracking-tight text-gray-900">Exams System</h1>
+                            <p className="text-xs text-gray-500 font-medium">Workspace</p>
+                        </div>
+                    </div>
+                    <div className="flex items-center gap-4">
+                        <span className="text-sm text-gray-600">Welcome, {admin?.name}</span>
                         <button
                             onClick={handleLogout}
-                            className="flex items-center gap-2 px-4 py-2 text-gray-700 hover:bg-red-50 rounded-xl transition-all duration-200 border border-transparent hover:border-red-200"
+                            className="text-sm font-medium text-gray-500 hover:text-gray-900 transition-colors"
                         >
-                            <LogOut className="w-5 h-5" />
-                            Logout
+                            Log out
                         </button>
                     </div>
                 </div>
@@ -137,175 +159,138 @@ export default function AdminDashboard() {
                 {/* Stats Cards */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
                     <StatCard
-                        icon={<FileText className="w-8 h-8 text-white" />}
                         title="Total Exams"
                         value={exams.length}
-                        gradient="from-gray-700 to-gray-900"
+                        icon={<FileText className="w-5 h-5" />}
                     />
                     <StatCard
-                        icon={<CheckCircle2 className="w-8 h-8 text-white" />}
-                        title="Active Exams"
+                        title="Active Now"
                         value={exams.filter(e => e.is_active).length}
-                        gradient="from-green-600 to-green-700"
+                        icon={<Users className="w-5 h-5 text-green-600" />}
                     />
                     <StatCard
-                        icon={<XCircle className="w-8 h-8 text-white" />}
-                        title="Inactive"
-                        value={exams.filter(e => !e.is_active).length}
-                        gradient="from-gray-500 to-gray-600"
+                        title="Avg Pass Rate"
+                        value="76%"
+                        icon={<TrendingUp className="w-5 h-5 text-blue-600" />}
                     />
                 </div>
 
-                {/* Actions Bar */}
-                <div className="flex flex-col md:flex-row gap-4 mb-6 justify-between items-center">
-                    <div className="relative w-full md:w-96">
-                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-                        <input
-                            type="text"
-                            placeholder="Search exams..."
-                            value={searchQuery}
-                            onChange={(e) => setSearchQuery(e.target.value)}
-                            className="w-full pl-10 pr-4 py-3 bg-white border border-gray-300 rounded-xl text-[15px] focus:ring-2 focus:ring-gray-900 focus:border-transparent transition-all duration-200 hover:border-gray-400"
-                        />
+                {/* Toolbar */}
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-6">
+                    <div>
+                        <h2 className="text-2xl font-bold text-gray-900 tracking-tight">Overview</h2>
+                        <p className="text-gray-500 mt-1 text-sm">Manage your assessment environment</p>
                     </div>
-                    <Link
-                        href="/admin/create-exam"
-                        className="w-full md:w-auto inline-flex items-center justify-center gap-2 px-6 py-3 bg-gray-900 text-white rounded-xl hover:bg-gray-800 active:scale-[0.99] transition-all duration-200 font-semibold shadow-lg shadow-gray-900/10 hover:shadow-xl hover:shadow-gray-900/20"
-                    >
-                        <Plus className="w-5 h-5" />
-                        Create New Exam
-                    </Link>
+
+                    <div className="flex items-center gap-3">
+                        <div className="relative">
+                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                            <input
+                                type="text"
+                                placeholder="Search exams..."
+                                value={searchQuery}
+                                onChange={(e) => setSearchQuery(e.target.value)}
+                                className="pl-9 pr-4 py-2 bg-white border border-gray-200 rounded-lg text-sm text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-black focus:border-transparent transition-all w-64 shadow-sm"
+                            />
+                        </div>
+                        <Link
+                            href="/admin/create-exam"
+                            className="flex items-center gap-2 px-4 py-2 bg-black hover:bg-gray-800 text-white rounded-lg text-sm font-medium transition-all shadow-sm"
+                        >
+                            <Plus className="w-4 h-4" />
+                            New Exam
+                        </Link>
+                    </div>
                 </div>
 
-                {/* Exams List */}
-                <div className="bg-white/80 backdrop-blur-xl rounded-2xl shadow-2xl shadow-black/10 border border-gray-200/60 overflow-hidden">
-                    <div className="px-6 py-4 border-b border-gray-200 bg-gray-50">
-                        <h2 className="text-xl font-semibold text-gray-900">Your Exams</h2>
-                    </div>
-
-                    {exams.length === 0 ? (
-                        <div className="px-6 py-12 text-center">
-                            <FileText className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-                            <p className="text-gray-600 text-lg mb-4">No exams yet</p>
-                            <Link
-                                href="/admin/create-exam"
-                                className="text-blue-600 hover:text-blue-700 font-medium"
-                            >
-                                Create your first exam
-                            </Link>
-                        </div>
-                    ) : (
-                        <div className="divide-y divide-gray-200">
-                            {filteredExams.map((exam) => (
-                                <div
-                                    key={exam.id}
-                                    className="px-6 py-4 hover:bg-gray-50 transition-all duration-200"
-                                >
-                                    <div className="flex items-center justify-between">
-                                        <div className="flex-1">
-                                            <div className="flex items-center gap-3 mb-2">
-                                                <h3 className="text-lg font-semibold text-gray-900">
-                                                    {exam.title}
-                                                </h3>
-                                                <span className={`px-3 py-1 rounded-full text-xs font-semibold ${exam.is_active
-                                                    ? 'bg-green-100 text-green-700 border border-green-200'
-                                                    : 'bg-gray-100 text-gray-600 border border-gray-200'
-                                                    }`}>
-                                                    {exam.is_active ? '● Active' : '○ Inactive'}
-                                                </span>
+                {/* Clean Table */}
+                <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+                    <table className="w-full text-left border-collapse">
+                        <thead>
+                            <tr className="border-b border-gray-100 bg-gray-50/50">
+                                <th className="py-3 px-6 text-xs font-semibold text-gray-500 uppercase tracking-wider w-1/3">Exam Name</th>
+                                <th className="py-3 px-6 text-xs font-semibold text-gray-500 uppercase tracking-wider">Status</th>
+                                <th className="py-3 px-6 text-xs font-semibold text-gray-500 uppercase tracking-wider">Specs</th>
+                                <th className="py-3 px-6 text-xs font-semibold text-gray-500 uppercase tracking-wider text-right">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                            {filteredExams.length === 0 ? (
+                                <tr>
+                                    <td colSpan={4} className="py-12 text-center text-gray-500">
+                                        No exams found.
+                                    </td>
+                                </tr>
+                            ) : (
+                                filteredExams.map((exam) => (
+                                    <tr key={exam.id} className="group hover:bg-gray-50 transition-colors">
+                                        <td className="py-4 px-6">
+                                            <div className="flex items-start gap-4">
+                                                <div className="p-2 bg-gray-100 rounded-lg text-gray-600 group-hover:bg-white group-hover:shadow-sm transition-all">
+                                                    <FileText className="w-5 h-5" />
+                                                </div>
+                                                <div>
+                                                    <div className="font-semibold text-gray-900">{exam.title}</div>
+                                                    <div className="text-sm text-gray-500 truncate max-w-[280px]">{exam.description || 'No description'}</div>
+                                                </div>
                                             </div>
-                                            <p className="text-gray-600 text-sm mb-2">
-                                                {exam.description || 'No description'}
-                                            </p>
-                                            <div className="flex gap-4 text-sm text-gray-500">
-                                                <span className="flex items-center gap-1">
-                                                    <FileText className="w-4 h-4" />
-                                                    {exam.duration_minutes} minutes
-                                                </span>
-                                                <span className="flex items-center gap-1">
-                                                    <TrendingUp className="w-4 h-4" />
-                                                    Pass: {exam.pass_score}%
-                                                </span>
+                                        </td>
+                                        <td className="py-4 px-6">
+                                            <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border ${exam.is_active
+                                                ? 'bg-green-50 text-green-700 border-green-200'
+                                                : 'bg-gray-100 text-gray-600 border-gray-200'
+                                                }`}>
+                                                <span className={`w-1.5 h-1.5 rounded-full ${exam.is_active ? 'bg-green-500' : 'bg-gray-400'}`} />
+                                                {exam.is_active ? 'Active' : 'Inactive'}
+                                            </span>
+                                        </td>
+                                        <td className="py-4 px-6">
+                                            <div className="flex flex-col gap-1 text-sm text-gray-500">
+                                                <span>{exam.duration_minutes} mins</span>
+                                                <span>Pass: {exam.pass_score}%</span>
                                             </div>
-                                        </div>
-
-                                        <div className="flex items-center gap-2">
-                                            <button
-                                                onClick={() => copyLink(exam.id)}
-                                                className="p-2 text-gray-600 hover:bg-blue-50 hover:text-blue-600 rounded-lg transition-all duration-200"
-                                                title="Copy exam link"
-                                            >
-                                                <Copy className="w-5 h-5" />
-                                            </button>
-
-                                            <Link
-                                                href={`/admin/exam/${exam.id}`}
-                                                className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-all duration-200"
-                                                title="View details"
-                                            >
-                                                <ExternalLink className="w-5 h-5" />
-                                            </Link>
-
-                                            <button
-                                                onClick={() => cloneExam(exam.id)}
-                                                className="p-2 text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all duration-200"
-                                                title="Clone exam"
-                                            >
-                                                <Copy className="w-5 h-5" />
-                                            </button>
-
-                                            <button
-                                                onClick={() => deleteExam(exam.id)}
-                                                className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-all duration-200"
-                                                title="Delete exam"
-                                            >
-                                                <Trash2 className="w-5 h-5" />
-                                            </button>
-                                        </div>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    )}
+                                        </td>
+                                        <td className="py-4 px-6 text-right">
+                                            <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                <button onClick={() => copyLink(exam.id)} className="p-2 text-gray-400 hover:text-indigo-600 rounded-md hover:bg-indigo-50 transition-colors" title="Copy Link">
+                                                    <Link2 className="w-4 h-4" />
+                                                </button>
+                                                <button onClick={() => cloneExam(exam.id)} className="p-2 text-gray-400 hover:text-green-600 rounded-md hover:bg-green-50 transition-colors" title="Clone Exam">
+                                                    <Copy className="w-4 h-4" />
+                                                </button>
+                                                <Link href={`/admin/exam/${exam.id}`} className="p-2 text-gray-400 hover:text-blue-600 rounded-md hover:bg-blue-50 transition-colors" title="Details">
+                                                    <ExternalLink className="w-4 h-4" />
+                                                </Link>
+                                                <button onClick={() => deleteExam(exam.id)} className="p-2 text-gray-400 hover:text-red-600 rounded-md hover:bg-red-50 transition-colors" title="Delete">
+                                                    <Trash2 className="w-4 h-4" />
+                                                </button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                ))
+                            )}
+                        </tbody>
+                    </table>
                 </div>
             </main>
-
-            <style jsx>{`
-                @keyframes blob {
-                    0%, 100% { transform: translateY(0px); }
-                    50% { transform: translateY(-20px); }
-                }
-                .animate-blob {
-                    animation: blob 7s infinite;
-                }
-                .animation-delay-2000 {
-                    animation-delay: 2s;
-                }
-                .animation-delay-4000 {
-                    animation-delay: 4s;
-                }
-            `}</style>
         </div>
     )
 }
 
-function StatCard({ icon, title, value, gradient }: {
-    icon: React.ReactNode
+function StatCard({ title, value, icon }: {
     title: string
-    value: number
-    gradient: string
+    value: string | number
+    icon: React.ReactNode
 }) {
     return (
-        <div className="bg-white/90 backdrop-blur-sm rounded-2xl shadow-lg border border-gray-200/50 p-6 hover:shadow-xl transition-all duration-300">
-            <div className="flex items-center gap-4">
-                <div className={`p-3 bg-gradient-to-br ${gradient} rounded-xl shadow-md`}>
+        <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
+            <div className="flex items-center justify-between mb-4">
+                <span className="text-gray-500 text-sm font-medium">{title}</span>
+                <div className="text-gray-400">
                     {icon}
                 </div>
-                <div>
-                    <p className="text-gray-600 text-sm font-medium">{title}</p>
-                    <p className="text-3xl font-bold bg-gradient-to-r from-gray-900 to-gray-700 bg-clip-text text-transparent">{value}</p>
-                </div>
             </div>
+            <div className="text-3xl font-bold text-gray-900 tracking-tight">{value}</div>
         </div>
     )
 }

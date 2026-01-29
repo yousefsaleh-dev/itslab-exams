@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { getSession } from '@/lib/auth'
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
 
 interface CreateExamRequest {
-    adminId: string
     title: string
     description: string
     duration_minutes: number
@@ -37,12 +37,22 @@ export async function POST(request: NextRequest) {
     })
 
     try {
+        // SECURITY: Verify session
+        const session = await getSession()
+        if (!session || !session.id) {
+            return NextResponse.json(
+                { error: 'Unauthorized: Please login first' },
+                { status: 401 }
+            )
+        }
+
         const body: CreateExamRequest = await request.json()
+        const adminId = session.id
 
         // Validate required fields
-        if (!body.adminId || !body.title?.trim()) {
+        if (!body.title?.trim()) {
             return NextResponse.json(
-                { error: 'Admin ID and title are required' },
+                { error: 'Exam title is required' },
                 { status: 400 }
             )
         }
@@ -87,7 +97,7 @@ export async function POST(request: NextRequest) {
         const { data: examData, error: examError } = await supabase
             .from('exams')
             .insert([{
-                admin_id: body.adminId,
+                admin_id: adminId, // Enforced from session
                 title: body.title,
                 description: body.description,
                 duration_minutes: body.duration_minutes,

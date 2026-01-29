@@ -1,0 +1,681 @@
+[
+  {
+    "id": "TC001",
+    "title": "Admin Registration with Valid Inputs",
+    "description": "Verify that an admin can register successfully with valid email, password meeting complexity requirements.",
+    "category": "functional",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to admin registration page."
+      },
+      {
+        "type": "action",
+        "description": "Enter a valid email address."
+      },
+      {
+        "type": "action",
+        "description": "Enter a password adhering to password policy."
+      },
+      {
+        "type": "action",
+        "description": "Submit the registration form."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify registration is successful and confirmation message is shown."
+      }
+    ]
+  },
+  {
+    "id": "TC002",
+    "title": "Admin Registration with Invalid Password",
+    "description": "Ensure registration fails when the password does not meet complexity requirements.",
+    "category": "error handling",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to admin registration page."
+      },
+      {
+        "type": "action",
+        "description": "Enter a valid email address."
+      },
+      {
+        "type": "action",
+        "description": "Enter a password that is too short or missing required character types."
+      },
+      {
+        "type": "action",
+        "description": "Submit the registration form."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify registration fails with appropriate error message."
+      }
+    ]
+  },
+  {
+    "id": "TC003",
+    "title": "Admin Login with Correct Credentials",
+    "description": "Check that admin can log in with valid email and password.",
+    "category": "functional",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to admin login page."
+      },
+      {
+        "type": "action",
+        "description": "Enter registered email and corresponding valid password."
+      },
+      {
+        "type": "action",
+        "description": "Click the login button."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify login succeeds and dashboard is displayed."
+      }
+    ]
+  },
+  {
+    "id": "TC004",
+    "title": "Admin Login with Incorrect Credentials",
+    "description": "Ensure login fails with wrong email or password combination.",
+    "category": "error handling",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to admin login page."
+      },
+      {
+        "type": "action",
+        "description": "Enter unregistered email or invalid password."
+      },
+      {
+        "type": "action",
+        "description": "Click the login button."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify login is denied with an error message."
+      }
+    ]
+  },
+  {
+    "id": "TC005",
+    "title": "Admin Password Reset Workflow Valid Email",
+    "description": "Ensure password reset process works with a registered email.",
+    "category": "functional",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to admin forgot password page."
+      },
+      {
+        "type": "action",
+        "description": "Enter a registered admin email address."
+      },
+      {
+        "type": "action",
+        "description": "Submit the password reset request."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify receipt of reset token/link and appropriate confirmation message."
+      }
+    ]
+  },
+  {
+    "id": "TC006",
+    "title": "Admin Password Reset Workflow Invalid Email",
+    "description": "Verify system response when resetting password with unregistered email.",
+    "category": "error handling",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to admin forgot password page."
+      },
+      {
+        "type": "action",
+        "description": "Enter an unregistered email address."
+      },
+      {
+        "type": "action",
+        "description": "Submit the password reset request."
+      },
+      {
+        "type": "assertion",
+        "description": "Confirm that a generic response is shown without revealing user existence."
+      }
+    ]
+  },
+  {
+    "id": "TC007",
+    "title": "Create New Exam with All Configurable Options",
+    "description": "Validate that an admin can create an exam specifying pass score, duration, shuffle settings, offline grace period, and access code.",
+    "category": "functional",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Log in as admin and navigate to create exam page."
+      },
+      {
+        "type": "action",
+        "description": "Fill exam form with valid values for title, pass score, duration, question shuffle, answer shuffle, offline grace period, and access code."
+      },
+      {
+        "type": "action",
+        "description": "Add multiple-choice questions with options and set correct answers."
+      },
+      {
+        "type": "action",
+        "description": "Submit the exam creation form."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify exam is created successfully and is listed on exam management page."
+      }
+    ]
+  },
+  {
+    "id": "TC008",
+    "title": "Edit Existing Exam and Validate Changes",
+    "description": "Check that an admin can edit and save changes to an existing exam's details and questions.",
+    "category": "functional",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Log in as admin and open an existing exam for editing."
+      },
+      {
+        "type": "action",
+        "description": "Modify exam title, pass score, or shuffle options."
+      },
+      {
+        "type": "action",
+        "description": "Edit questions or add new questions."
+      },
+      {
+        "type": "action",
+        "description": "Save changes."
+      },
+      {
+        "type": "assertion",
+        "description": "Confirm changes are saved and reflected on exam management page."
+      }
+    ]
+  },
+  {
+    "id": "TC009",
+    "title": "Clone an Exam and Verify Duplication",
+    "description": "Ensure that cloning an exam creates a new exam copy with identical data but a unique ID.",
+    "category": "functional",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Log in as admin and navigate to the exam list."
+      },
+      {
+        "type": "action",
+        "description": "Select an exam to clone and trigger clone operation."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify a new exam is created with the same questions and settings but a different identifier."
+      }
+    ]
+  },
+  {
+    "id": "TC010",
+    "title": "Delete an Exam Successfully",
+    "description": "Verify that an admin can delete an exam and it is removed from the listing.",
+    "category": "functional",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Log in as admin and navigate to exam management."
+      },
+      {
+        "type": "action",
+        "description": "Select an exam and delete it."
+      },
+      {
+        "type": "assertion",
+        "description": "Confirm exam no longer appears in the exam list and that deletion prompt warns admin."
+      }
+    ]
+  },
+  {
+    "id": "TC011",
+    "title": "Activate and Deactivate Exam Toggle",
+    "description": "Check that an admin can toggle the exam’s activation status and that the change affects exam availability for students.",
+    "category": "functional",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Log in as admin and navigate to exam management."
+      },
+      {
+        "type": "action",
+        "description": "Toggle an exam’s active status off and verify it is inaccessible by students."
+      },
+      {
+        "type": "action",
+        "description": "Toggle exam active status on and verify students can access it."
+      },
+      {
+        "type": "assertion",
+        "description": "Confirm toggle changes persist and reflect correctly in UI and APIs."
+      }
+    ]
+  },
+  {
+    "id": "TC012",
+    "title": "Student Exam Start with Valid Access Code and Name",
+    "description": "Verify that students can start an exam by entering required access code and name, and entering fullscreen mode.",
+    "category": "functional",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Access exam link."
+      },
+      {
+        "type": "action",
+        "description": "Enter a valid student name and required access code."
+      },
+      {
+        "type": "action",
+        "description": "Agree to exam rules and start exam."
+      },
+      {
+        "type": "assertion",
+        "description": "Ensure exam starts, fullscreen is enforced, and timer begins countdown."
+      }
+    ]
+  },
+  {
+    "id": "TC013",
+    "title": "Reject Exam Start with Incorrect Access Code",
+    "description": "Ensure the exam cannot start when an invalid access code is provided.",
+    "category": "error handling",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Access exam link."
+      },
+      {
+        "type": "action",
+        "description": "Enter student name and an invalid access code."
+      },
+      {
+        "type": "action",
+        "description": "Attempt to start exam."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify validation failure and error message is displayed without entering exam."
+      }
+    ]
+  },
+  {
+    "id": "TC014",
+    "title": "Ensure Fullscreen Mode Enforcement During Exam",
+    "description": "Verify that the student exam interface enforces fullscreen mode and reverts to exam exit warnings if fullscreen is exited.",
+    "category": "security",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Start an exam in fullscreen mode."
+      },
+      {
+        "type": "action",
+        "description": "Manually exit fullscreen mode during exam."
+      },
+      {
+        "type": "assertion",
+        "description": "Check that warning is displayed and exit count increments."
+      }
+    ]
+  },
+  {
+    "id": "TC015",
+    "title": "Auto-Submit Exam After Allowed Fullscreen Exits",
+    "description": "Verify that the exam auto-submits when student exceeds the allowed number of fullscreen exits.",
+    "category": "security",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Start exam and exit fullscreen repeatedly to reach the maximum allowed exits."
+      },
+      {
+        "type": "assertion",
+        "description": "Confirm exam auto-submits and student cannot resume exam."
+      }
+    ]
+  },
+  {
+    "id": "TC016",
+    "title": "Restrict Copy, Context Menu, and Dev Tools During Exam",
+    "description": "Validate that copy operation, right-click context menu, and developer tools opening are blocked on the exam page.",
+    "category": "security",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Start the exam in fullscreen."
+      },
+      {
+        "type": "action",
+        "description": "Attempt to copy text using keyboard shortcuts."
+      },
+      {
+        "type": "action",
+        "description": "Right-click to open context menu."
+      },
+      {
+        "type": "action",
+        "description": "Attempt to open browser developer tools."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify all attempts are blocked or disabled with no disruptions to exam flow."
+      }
+    ]
+  },
+  {
+    "id": "TC017",
+    "title": "Answer Selection and Flagging Functionality",
+    "description": "Ensure students can select answers, change selections, and flag/unflag questions during the exam.",
+    "category": "functional",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate through exam questions."
+      },
+      {
+        "type": "action",
+        "description": "Select an answer for a question."
+      },
+      {
+        "type": "action",
+        "description": "Change the answer selection to another choice."
+      },
+      {
+        "type": "action",
+        "description": "Flag a question for review."
+      },
+      {
+        "type": "action",
+        "description": "Unflag the question."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify answers save correctly and flagged questions are tracked."
+      }
+    ]
+  },
+  {
+    "id": "TC018",
+    "title": "Timer Counts Down and Triggers Auto-Submit on Expiry",
+    "description": "Check timer counts down precisely and automatically submits the exam when time expires.",
+    "category": "functional",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Start an exam with a short configured duration."
+      },
+      {
+        "type": "assertion",
+        "description": "Observe timer counting down every second accurately."
+      },
+      {
+        "type": "action",
+        "description": "Allow timer to reach zero without manual submission."
+      },
+      {
+        "type": "assertion",
+        "description": "Confirm exam auto-submits and student sees completion screen."
+      }
+    ]
+  },
+  {
+    "id": "TC019",
+    "title": "Pause Timer and Resume on Internet Disconnection and Recovery",
+    "description": "Verify timer pauses when internet connection is lost, shows warning, and resumes if connection returns within grace period.",
+    "category": "functional",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Start an exam and disconnect internet."
+      },
+      {
+        "type": "assertion",
+        "description": "Confirm timer pauses and disconnection warning is shown."
+      },
+      {
+        "type": "action",
+        "description": "Reconnect internet within the grace period."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify timer resumes counting down from where it paused."
+      }
+    ]
+  },
+  {
+    "id": "TC020",
+    "title": "Auto-Submit Exam if Offline Period Exceeds Grace Period",
+    "description": "Ensure exam auto-submits if student remains disconnected beyond configured offline grace period.",
+    "category": "functional",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Start an exam and disconnect internet."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify timer pauses and warning is displayed."
+      },
+      {
+        "type": "action",
+        "description": "Remain offline longer than grace period."
+      },
+      {
+        "type": "assertion",
+        "description": "Confirm exam auto-submits automatically and student is notified."
+      }
+    ]
+  },
+  {
+    "id": "TC021",
+    "title": "Exam State Recovery After LocalStorage Loss",
+    "description": "Test that if localStorage is cleared or lost, the exam state is recovered correctly from server via recovery API.",
+    "category": "functional",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Start an exam and answer some questions."
+      },
+      {
+        "type": "action",
+        "description": "Manually clear browser localStorage related to exam."
+      },
+      {
+        "type": "action",
+        "description": "Reload the exam page."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify exam state including answers, timer, and flags is restored from server."
+      }
+    ]
+  },
+  {
+    "id": "TC022",
+    "title": "Server-Side Scoring and Answer Validation Accuracy",
+    "description": "Ensure server correctly calculates scores and validates answers without exposing correct answers on client side.",
+    "category": "functional",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Complete an exam with a mix of correct and incorrect answers."
+      },
+      {
+        "type": "action",
+        "description": "Submit the exam."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify server returns correct total score and result."
+      },
+      {
+        "type": "assertion",
+        "description": "Ensure correct answers are not present in client responses or UI."
+      }
+    ]
+  },
+  {
+    "id": "TC023",
+    "title": "View Detailed Exam Attempts and Analytics in Admin Dashboard",
+    "description": "Check that admins can view exam statistics including attempt counts, pass rates, average scores, and question performance.",
+    "category": "functional",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Log in as admin and open dashboard for a specific exam."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify display of total attempts, pass and fail counts, average scores."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify detailed question performance stats and violation logs are present."
+      }
+    ]
+  },
+  {
+    "id": "TC024",
+    "title": "Delete a Student Attempt from Admin Dashboard",
+    "description": "Verify admins can delete student attempts and changes reflect on dashboard metrics.",
+    "category": "functional",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Log in as admin and view student attempts list."
+      },
+      {
+        "type": "action",
+        "description": "Select and delete a specific attempt."
+      },
+      {
+        "type": "assertion",
+        "description": "Confirm deletion is successful and attempt is removed from dashboard analytics."
+      }
+    ]
+  },
+  {
+    "id": "TC025",
+    "title": "Row-Level Security Enforcement on Admin APIs",
+    "description": "Ensure API endpoints restrict access to data based on admin authentication and data ownership.",
+    "category": "security",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Attempt to access exam and attempt management APIs without authentication."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify access is denied with authentication error."
+      },
+      {
+        "type": "action",
+        "description": "Login as admin A and attempt to access data belonging to admin B."
+      },
+      {
+        "type": "assertion",
+        "description": "Confirm access is denied or no data is returned for unauthorized resources."
+      }
+    ]
+  },
+  {
+    "id": "TC026",
+    "title": "Responsive UI on Desktop and Major Browsers",
+    "description": "Verify the application UI renders correctly and is usable on desktop resolutions and supported major browsers.",
+    "category": "ui",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Access the application on latest Chrome, Firefox, Edge, and Safari browsers on desktop."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify that pages resize correctly, elements align properly, and are accessible."
+      },
+      {
+        "type": "assertion",
+        "description": "Test key workflows (admin login, exam creation, exam taking) for UI consistency."
+      }
+    ]
+  },
+  {
+    "id": "TC027",
+    "title": "Clear and Informative User Feedback on Operations",
+    "description": "Validate that after successful or failed actions, users receive clear confirmation or error messages.",
+    "category": "ui",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Attempt admin login with incorrect credentials."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify clear error message is displayed."
+      },
+      {
+        "type": "action",
+        "description": "Create an exam and submit successfully."
+      },
+      {
+        "type": "assertion",
+        "description": "Confirm success message is shown."
+      },
+      {
+        "type": "action",
+        "description": "Delete an exam and confirm."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify confirmation prompt and success notification after deletion."
+      }
+    ]
+  }
+]
