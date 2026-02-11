@@ -486,7 +486,7 @@ export default function ExamForm({ initialData, isEditing = false }: ExamFormPro
                                         type="text"
                                         value={aiPrompt}
                                         onChange={(e) => setAiPrompt(e.target.value)}
-                                        onKeyPress={(e) => e.key === 'Enter' && generateWithAI()}
+                                        onKeyDown={(e) => e.key === 'Enter' && generateWithAI()}
                                         className="block w-full pl-11 pr-4 py-3.5 bg-white/5 border border-white/10 rounded-xl text-white placeholder-gray-500 focus:ring-2 focus:ring-purple-500/50 focus:border-purple-500/50 focus:bg-white/10 transition-all shadow-sm sm:text-sm"
                                         placeholder="Describe the exam topic (e.g., 'React Hooks and State Management')..."
                                         disabled={aiLoading}

@@ -14,6 +14,7 @@ export default function AdminDashboard() {
     const [exams, setExams] = useState<Exam[]>([])
     const [loading, setLoading] = useState(true)
     const [searchQuery, setSearchQuery] = useState('')
+    const [avgPassRate, setAvgPassRate] = useState<string>('—')
 
     useEffect(() => {
         if (!admin) {
@@ -32,7 +33,40 @@ export default function AdminDashboard() {
                 throw new Error(data.error || 'Failed to load exams')
             }
 
-            setExams(data.exams || [])
+            const fetchedExams = data.exams || []
+            setExams(fetchedExams)
+
+            // Calculate real avg pass rate from this admin's exams
+            if (fetchedExams.length > 0) {
+                try {
+                    const examIds = fetchedExams.map((e: Exam) => e.id)
+                    const { data: attempts } = await supabase
+                        .from('student_attempts')
+                        .select('score, exam_id')
+                        .in('exam_id', examIds)
+                        .eq('completed', true)
+                        .not('score', 'is', null)
+
+                    if (attempts && attempts.length > 0) {
+                        // Count how many passed (score >= exam's pass_score)
+                        const passScoreMap: Record<string, number> = {}
+                        fetchedExams.forEach((e: Exam) => { passScoreMap[e.id] = e.pass_score })
+
+                        const passedCount = attempts.filter(
+                            (a: any) => a.score >= (passScoreMap[a.exam_id] || 50)
+                        ).length
+
+                        const rate = Math.round((passedCount / attempts.length) * 100)
+                        setAvgPassRate(`${rate}%`)
+                    } else {
+                        setAvgPassRate('—')
+                    }
+                } catch {
+                    setAvgPassRate('—')
+                }
+            } else {
+                setAvgPassRate('—')
+            }
         } catch (error) {
             toast.error('Failed to load exams')
         } finally {
@@ -170,7 +204,7 @@ export default function AdminDashboard() {
                     />
                     <StatCard
                         title="Avg Pass Rate"
-                        value="76%"
+                        value={avgPassRate}
                         icon={<TrendingUp className="w-5 h-5 text-blue-600" />}
                     />
                 </div>

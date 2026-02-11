@@ -1486,7 +1486,7 @@ export default function StudentExamPage() {
                                     type="text"
                                     value={studentName}
                                     onChange={(e) => setStudentName(e.target.value)}
-                                    onKeyPress={(e) => {
+                                    onKeyDown={(e) => {
                                         if (e.key === 'Enter' && studentName.trim() && isOnline) {
                                             startExam()
                                         }

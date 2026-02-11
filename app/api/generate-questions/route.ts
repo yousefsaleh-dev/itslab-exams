@@ -154,7 +154,7 @@ Generate ${count} questions now.`
         return NextResponse.json({ questions: validQuestions })
 
     } catch (error: any) {
-        // console.error('Groq Generation Error:', error)
+        console.error('Groq Generation Error:', error)
         return NextResponse.json(
             { error: error.message || 'Failed to generate questions' },
             { status: 500 }
