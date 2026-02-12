@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
@@ -16,7 +16,14 @@ export default function AdminLoginPage() {
     const [loading, setLoading] = useState(false)
 
     const router = useRouter()
-    const setAdmin = useAuthStore((state) => state.setAdmin)
+    const { admin, setAdmin } = useAuthStore()
+
+    // Redirect if already logged in
+    useEffect(() => {
+        if (admin) {
+            router.replace('/admin/dashboard')
+        }
+    }, [admin, router])
 
     const handleLogin = async (e: React.FormEvent) => {
         e.preventDefault()

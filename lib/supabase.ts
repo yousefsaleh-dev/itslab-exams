@@ -72,6 +72,9 @@ export interface StudentAttempt {
     // Offline grace period fields
     total_offline_seconds: number
     went_offline_at: string | null
+    // Device Info
+    ip_address?: string
+    user_agent?: string
 }
 
 export interface StudentAnswer {

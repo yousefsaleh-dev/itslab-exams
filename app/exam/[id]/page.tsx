@@ -52,6 +52,7 @@ export default function StudentExamPage() {
     const [totalOfflineSeconds, setTotalOfflineSeconds] = useState(0)
     const [currentOfflineDuration, setCurrentOfflineDuration] = useState(0)
     const blurCountRef = useRef(0) // MEDIUM-3 fix: persist blur count across re-renders
+    const blurStartTimeRef = useRef<number | null>(null) // Track when blur started for duration calculation
 
     // Timer warnings state
     const [warningShown5min, setWarningShown5min] = useState(false)
@@ -60,6 +61,8 @@ export default function StudentExamPage() {
     // Security tracking
     const [devToolsDetected, setDevToolsDetected] = useState(false)
     const copyAttemptsRef = useRef(0)
+    const suspiciousActivityQueueRef = useRef<Array<{ type: string; timestamp: string; details: string }>>([])
+    const suspiciousActivityFlushTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
     const { attemptId, answers, exitCount, setAttemptId, setAnswer, incrementExitCount, reset, setExitCount } = useExamStore()
 
@@ -246,7 +249,6 @@ export default function StudentExamPage() {
             .single()
 
         if (fetchError) {
-            console.error('❌ Failed to fetch attempt:', fetchError)
             return
         }
 
@@ -258,17 +260,65 @@ export default function StudentExamPage() {
         })
 
         // Update DB  
-        const { error } = await supabase.from('student_attempts').update({
+        await supabase.from('student_attempts').update({
             suspicious_activities: activities,
             last_activity: new Date().toISOString()
         }).eq('id', attemptId)
-
-        if (error) {
-            // console.error('❌ Failed to update copy:', error)
-        } else {
-            // console.log(`✅ Copy attempt #${copyAttemptsRef.current} - updated DB`)
-        }
     }, [attemptId])
+
+    // ====== GENERIC SUSPICIOUS ACTIVITY HANDLER (Batched) ======
+    const flushSuspiciousActivities = useCallback(async () => {
+        if (!attemptId || suspiciousActivityQueueRef.current.length === 0) return
+
+        const pending = [...suspiciousActivityQueueRef.current]
+        suspiciousActivityQueueRef.current = []
+
+        const { data: attempt, error: fetchError } = await supabase
+            .from('student_attempts')
+            .select('suspicious_activities')
+            .eq('id', attemptId)
+            .single()
+
+        if (fetchError) return
+
+        const activities = Array.isArray(attempt?.suspicious_activities) ? attempt.suspicious_activities : []
+        activities.push(...pending)
+
+        await supabase.from('student_attempts').update({
+            suspicious_activities: activities,
+            last_activity: new Date().toISOString()
+        }).eq('id', attemptId)
+    }, [attemptId])
+
+    const handleSuspiciousActivity = useCallback((activity: { type: string; details: string }) => {
+        if (!attemptId) return
+
+        suspiciousActivityQueueRef.current.push({
+            ...activity,
+            timestamp: new Date().toISOString()
+        })
+
+        // Debounce: flush after 2 seconds to batch multiple rapid events
+        if (suspiciousActivityFlushTimeoutRef.current) {
+            clearTimeout(suspiciousActivityFlushTimeoutRef.current)
+        }
+        suspiciousActivityFlushTimeoutRef.current = setTimeout(() => {
+            flushSuspiciousActivities()
+        }, 2000)
+    }, [attemptId, flushSuspiciousActivities])
+
+    // Flush pending activities on unmount
+    useEffect(() => {
+        return () => {
+            if (suspiciousActivityFlushTimeoutRef.current) {
+                clearTimeout(suspiciousActivityFlushTimeoutRef.current)
+            }
+            // Do a final sync
+            if (suspiciousActivityQueueRef.current.length > 0) {
+                flushSuspiciousActivities()
+            }
+        }
+    }, [flushSuspiciousActivities])
 
     // ====== USE EXAM PROTECTION HOOK ======
     useExamProtection({
@@ -277,6 +327,7 @@ export default function StudentExamPage() {
         timeLeft,
         onDevToolsDetected: handleDevToolsDetected,
         onCopyAttempt: handleCopyAttempt,
+        onSuspiciousActivity: handleSuspiciousActivity,
         warningShown5min,
         warningShown1min,
         setWarningShown5min,
@@ -431,6 +482,17 @@ export default function StudentExamPage() {
             localStorage.setItem(`exam_${params.id}_student_name`, examStudentName.trim())
             setStudentName(examStudentName)
 
+            // Capture IP address and user agent for anti-cheat tracking
+            let clientIp = 'unknown'
+            let clientUserAgent = navigator.userAgent || 'unknown'
+            try {
+                const ipRes = await fetch('/api/exam/client-info')
+                if (ipRes.ok) {
+                    const ipData = await ipRes.json()
+                    clientIp = ipData.ip || 'unknown'
+                }
+            } catch { /* ignore */ }
+
             const { data: newAttemptData, error } = await supabase
                 .from('student_attempts')
                 .insert([{
@@ -440,6 +502,13 @@ export default function StudentExamPage() {
                     time_remaining_seconds: exam!.duration_minutes * 60,
                     last_activity: new Date().toISOString(),
                     started_at: new Date().toISOString(),
+                    ip_address: clientIp,
+                    user_agent: clientUserAgent,
+                    suspicious_activities: [{
+                        type: 'exam_started',
+                        timestamp: new Date().toISOString(),
+                        details: `Exam started from IP: ${clientIp}`
+                    }]
                 }])
                 .select()
 
@@ -682,15 +751,19 @@ export default function StudentExamPage() {
             const currentExitCount = useExamStore.getState().exitCount
             const maxExits = exam?.max_exits || 3
 
-            // Update DB
+            // Update DB + log to suspicious_activities with timestamp
             if (attemptId) {
+                // Log fullscreen exit as suspicious activity
+                handleSuspiciousActivity({
+                    type: 'fullscreen_exit',
+                    details: `Fullscreen exit #${currentExitCount}/${maxExits} at time remaining: ${formatTime(timeLeft)}`
+                })
+
                 supabase.from('student_attempts').update({
                     exit_count: currentExitCount,
                     last_activity: new Date().toISOString(),
                     time_remaining_seconds: timeLeft
-                }).eq('id', attemptId).then(() => {
-                    // console.log('Exit count updated:', currentExitCount)
-                })
+                }).eq('id', attemptId).then(() => { })
             }
 
             if (currentExitCount >= maxExits) {
@@ -1195,54 +1268,81 @@ export default function StudentExamPage() {
         loadOfflineState()
     }, [attemptId, phase])
 
-    // Prevent tab switching / window blur during exam
+    // Prevent tab switching / window blur during exam (Enhanced with timestamps)
     useEffect(() => {
         if (phase !== 'exam') return
 
         const handleVisibilityChange = () => {
             if (document.hidden) {
-                // console.warn('Tab switched during exam')
-                // You could add additional logic here if needed
+                // Log tab switch as suspicious activity
+                handleSuspiciousActivity({
+                    type: 'tab_hidden',
+                    details: `Tab became hidden (switched to another tab/app)`
+                })
+            } else {
+                handleSuspiciousActivity({
+                    type: 'tab_visible',
+                    details: `Tab became visible again`
+                })
             }
         }
 
         document.addEventListener('visibilitychange', handleVisibilityChange)
         return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
-    }, [phase])
+    }, [phase, handleSuspiciousActivity])
 
 
-    // Prevent select start// Detect and warn about Alt+Tab / Window switching
+    // Detect and warn about Alt+Tab / Window switching (Enhanced with duration tracking)
     useEffect(() => {
         if (phase !== 'exam') return
 
         const handleBlur = () => {
             if (phase === 'exam') {
-                blurCountRef.current++ // Use ref to persist across re-renders
-                // console.warn(`Window blur detected (count: ${blurCountRef.current})`)
+                blurCountRef.current++
+                blurStartTimeRef.current = Date.now()
 
                 // Update DB with blur/switch count
                 if (attemptId) {
                     supabase.from('student_attempts').update({
                         window_switches: blurCountRef.current,
                         last_activity: new Date().toISOString()
-                    }).eq('id', attemptId).then(({ data, error }) => {
-                        if (error) {
-                            // console.error('Failed to update window_switches:', error)
-                        } else {
-                            // console.log('✅ Window switches updated successfully:', blurCountRef.current)
-                        }
-                    })
+                    }).eq('id', attemptId).then(() => { })
                 }
 
-                toast.error(`⚠️ Focus lost detected! Keep focus on exam window.`, {
+                // Log with timestamp in suspicious_activities
+                handleSuspiciousActivity({
+                    type: 'window_blur',
+                    details: `Window focus lost #${blurCountRef.current} at time remaining: ${formatTime(timeLeftRef.current)}`
+                })
+
+                toast.error(`⚠️ Focus lost detected! (${blurCountRef.current} times) Keep focus on exam window.`, {
                     duration: 3000,
                 })
             }
         }
 
+        const handleFocus = () => {
+            if (phase === 'exam' && blurStartTimeRef.current) {
+                const blurDuration = Math.round((Date.now() - blurStartTimeRef.current) / 1000)
+                blurStartTimeRef.current = null
+
+                // Log how long they were away
+                if (blurDuration > 1) {
+                    handleSuspiciousActivity({
+                        type: 'window_focus_return',
+                        details: `Returned to exam after ${blurDuration}s away`
+                    })
+                }
+            }
+        }
+
         window.addEventListener('blur', handleBlur)
-        return () => window.removeEventListener('blur', handleBlur)
-    }, [phase, attemptId])
+        window.addEventListener('focus', handleFocus)
+        return () => {
+            window.removeEventListener('blur', handleBlur)
+            window.removeEventListener('focus', handleFocus)
+        }
+    }, [phase, attemptId, handleSuspiciousActivity])
     // ====== RENDER ======
 
     // Inactive Exam State
@@ -1423,7 +1523,6 @@ export default function StudentExamPage() {
                                     onClick={() => {
                                         setStudentName('')
                                         localStorage.removeItem(`exam_${params.id}_student_name`)
-                                        setResumeAttempt(null)
                                         setPhase('start')
                                     }}
                                     className="px-4 py-2.5 bg-gray-100 text-gray-700 rounded-lg font-medium hover:bg-gray-200 transition"
@@ -1444,6 +1543,9 @@ export default function StudentExamPage() {
                         <div>
                             <div className="mb-6">
                                 <h1 className="text-2xl font-bold text-gray-900 mb-1">{examData.title}</h1>
+                                {(examData as any).instructor_name && (
+                                    <p className="text-sm font-medium text-blue-600 mb-1">by Eng. {(examData as any).instructor_name}</p>
+                                )}
                                 {examData.description && (
                                     <p className="text-gray-600 text-sm">{examData.description}</p>
                                 )}

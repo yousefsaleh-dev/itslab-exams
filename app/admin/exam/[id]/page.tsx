@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store'
 import { supabase, Exam, StudentAttempt } from '@/lib/supabase'
-import { ArrowLeft, Users, CheckCircle, XCircle, Clock, AlertTriangle, Copy, Download, Edit, Trash2, StopCircle, LogOut, ChevronRight, Search, Eye, Share2 } from 'lucide-react'
+import { ArrowLeft, Users, CheckCircle, XCircle, Clock, AlertTriangle, Copy, Download, Edit, Trash2, StopCircle, LogOut, ChevronRight, Search, Eye, Share2, Globe, Monitor } from 'lucide-react'
 import toast from 'react-hot-toast'
 import Link from 'next/link'
 import ExamPreviewModal from '@/components/admin/ExamPreviewModal'
@@ -21,6 +21,7 @@ export default function ExamDetailsPage() {
     const [loading, setLoading] = useState(true)
     const [activeTab, setActiveTab] = useState<'attempts' | 'analytics'>('attempts')
     const [selectedAttemptForViolations, setSelectedAttemptForViolations] = useState<StudentAttempt | null>(null)
+    const [selectedAttemptForInfo, setSelectedAttemptForInfo] = useState<StudentAttempt | null>(null)
 
     const [searchQuery, setSearchQuery] = useState('')
     const [showPreview, setShowPreview] = useState(false)
@@ -321,13 +322,31 @@ export default function ExamDetailsPage() {
                                     </tr>
                                 ) : (
                                     filteredAttempts.map((attempt) => {
-                                        // Calc violations
                                         const activities = Array.isArray(attempt.suspicious_activities) ? attempt.suspicious_activities : []
-                                        const devtools = activities.filter((a: any) => a.type === 'devtools_detected').length
-                                        const copy = activities.filter((a: any) => a.type === 'copy_attempt').length
-                                        const exit = attempt.exit_count || 0
+                                        // Only count actual violations, not info events
+                                        const infoTypes = new Set(['exam_started', 'tab_visible', 'window_focus_return'])
+                                        const violations = activities.filter((a: any) => !infoTypes.has(a.type))
+
+                                        // Fix: Add window_switches and exit_count to the total flags
                                         const switches = attempt.window_switches || 0
-                                        const totalViolations = devtools + copy + exit + switches + (activities.length > (devtools + copy) ? activities.length - (devtools + copy) : 0)
+                                        const exits = attempt.exit_count || 0
+
+                                        // Avoid double counting if they are already in suspicious_activities
+                                        // But usually explicit counters are more reliable for the summary
+                                        const activityCount = violations.length
+
+                                        // If we assume suspicious_activities might track them too, we should be careful.
+                                        // However, looking at the code, window_switches is often a separate counter in DB.
+                                        // Let's rely on the explicit counters + other activities.
+
+                                        // Filter out activities that correspond to exits/switches to avoid double counting if we use the counters
+                                        const otherViolations = violations.filter((a: any) =>
+                                            a.type !== 'fullscreen_exit' &&
+                                            a.type !== 'window_blur' &&
+                                            a.type !== 'tab_hidden'
+                                        ).length
+
+                                        const totalViolations = otherViolations + switches + exits
                                         const hasViolations = totalViolations > 0
 
                                         return (
@@ -377,6 +396,13 @@ export default function ExamDetailsPage() {
                                                 </td>
                                                 <td className="px-6 py-4 text-right">
                                                     <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                        <button
+                                                            onClick={() => setSelectedAttemptForInfo(attempt)}
+                                                            className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-colors"
+                                                            title="Device Info"
+                                                        >
+                                                            <Monitor className="w-4 h-4" />
+                                                        </button>
                                                         {!attempt.completed && (
                                                             <button
                                                                 onClick={() => forceFinishAttempt(attempt.id)}
@@ -620,27 +646,210 @@ export default function ExamDetailsPage() {
                                 </div>
                             </div>
 
+                            {/* IP / Device Info */}
+                            {((selectedAttemptForViolations as any).ip_address || (selectedAttemptForViolations as any).user_agent) && (
+                                <div className="mb-6 p-3 bg-gray-50 rounded-xl border border-gray-100">
+                                    <div className="flex flex-wrap gap-4 text-sm">
+                                        {(selectedAttemptForViolations as any).ip_address && (
+                                            <div className="flex items-center gap-2">
+                                                <Globe className="w-4 h-4 text-gray-400" />
+                                                <span className="font-medium text-gray-600">IP:</span>
+                                                <span className="font-mono text-gray-900">
+                                                    {(selectedAttemptForViolations as any).ip_address === '::1' || (selectedAttemptForViolations as any).ip_address === '127.0.0.1' ? 'Local Network' : (selectedAttemptForViolations as any).ip_address}
+                                                </span>
+                                            </div>
+                                        )}
+                                        {(selectedAttemptForViolations as any).user_agent && (() => {
+                                            const ua = (selectedAttemptForViolations as any).user_agent
+                                            let browser = 'Unknown Browser'
+                                            let os = 'Unknown OS'
+                                            if (ua.includes('Chrome') && !ua.includes('Edg')) browser = 'Chrome'
+                                            else if (ua.includes('Edg')) browser = 'Edge'
+                                            else if (ua.includes('Firefox')) browser = 'Firefox'
+                                            else if (ua.includes('Safari') && !ua.includes('Chrome')) browser = 'Safari'
+                                            if (ua.includes('Windows')) os = 'Windows'
+                                            else if (ua.includes('Mac OS')) os = 'macOS'
+                                            else if (ua.includes('Android')) os = 'Android'
+                                            else if (ua.includes('iPhone') || ua.includes('iPad')) os = 'iOS'
+                                            else if (ua.includes('Linux')) os = 'Linux'
+                                            return (
+                                                <div className="flex items-center gap-2">
+                                                    <Monitor className="w-4 h-4 text-gray-400" />
+                                                    <span className="font-medium text-gray-600">Device:</span>
+                                                    <span className="text-gray-900">{browser} • {os}</span>
+                                                </div>
+                                            )
+                                        })()}
+                                    </div>
+                                </div>
+                            )}
+
                             <div className="space-y-3">
                                 <h4 className="text-sm font-semibold text-gray-900 border-b border-gray-100 pb-2 mb-3">Timeline</h4>
-                                {(selectedAttemptForViolations.suspicious_activities?.length > 0) ? (
-                                    selectedAttemptForViolations.suspicious_activities.map((act: any, idx: number) => (
-                                        <div key={idx} className="flex gap-3 text-sm">
-                                            <div className="mt-1 min-w-[4px] w-1 bg-red-200 rounded-full" />
-                                            <div className="flex-1 pb-3">
-                                                <div className="flex justify-between">
-                                                    <span className="font-medium text-gray-900">
-                                                        {act.type === 'devtools_detected' ? 'DevTools Detected' :
-                                                            act.type === 'copy_attempt' ? 'Content Copy (Right Click)' : 'Suspicious Activity'}
-                                                    </span>
-                                                    <span className="text-gray-400 text-xs font-mono">{new Date(act.timestamp).toLocaleTimeString()}</span>
+                                {(() => {
+                                    const allActs = selectedAttemptForViolations.suspicious_activities || []
+                                    // Filter out info-level events
+                                    const infoTypes = new Set(['exam_started', 'tab_visible', 'window_focus_return'])
+                                    const violations = allActs.filter((a: any) => !infoTypes.has(a.type))
+
+                                    // Group rapid duplicates (same type within 10s)
+                                    const grouped: Array<{ type: string; details: string; timestamp: string; count: number }> = []
+                                    for (const act of violations) {
+                                        const last = grouped[grouped.length - 1]
+                                        if (last && last.type === act.type) {
+                                            const diff = act.timestamp && last.timestamp
+                                                ? Math.abs(new Date(act.timestamp).getTime() - new Date(last.timestamp).getTime())
+                                                : Infinity
+                                            if (diff < 10000) { last.count++; continue }
+                                        }
+                                        grouped.push({ ...act, count: 1 })
+                                    }
+
+                                    const labelMap: Record<string, string> = {
+                                        'devtools_detected': 'DevTools Detected',
+                                        'copy_attempt': 'Copy/Right-Click',
+                                        'fullscreen_exit': 'Fullscreen Exit',
+                                        'window_blur': 'Window Focus Lost',
+                                        'tab_hidden': 'Tab Switched Away',
+                                        'print_attempt': 'Print Attempt',
+                                        'print_executed': 'Print Executed',
+                                        'screenshot_attempt': 'Screenshot Attempt',
+                                        'snip_tool_attempt': 'Snip Tool',
+                                        'view_source_attempt': 'View Source',
+                                        'save_attempt': 'Save Page',
+                                        'find_attempt': 'Find in Page',
+                                        'select_all_attempt': 'Select All',
+                                        'address_bar_attempt': 'Address Bar Access',
+                                        'new_window_attempt': 'New Window',
+                                        'new_tab_attempt': 'New Tab',
+                                        'alt_tab_attempt': 'Alt+Tab',
+                                        'pip_attempt': 'Picture-in-Picture',
+                                    }
+
+                                    const severityMap: Record<string, string> = {
+                                        'devtools_detected': 'bg-red-50 border-red-200 text-red-700',
+                                        'screenshot_attempt': 'bg-red-50 border-red-200 text-red-700',
+                                        'print_attempt': 'bg-red-50 border-red-200 text-red-700',
+                                        'print_executed': 'bg-red-50 border-red-200 text-red-700',
+                                        'fullscreen_exit': 'bg-red-50 border-red-200 text-red-700',
+                                        'copy_attempt': 'bg-orange-50 border-orange-200 text-orange-700',
+                                        'window_blur': 'bg-orange-50 border-orange-200 text-orange-700',
+                                        'tab_hidden': 'bg-orange-50 border-orange-200 text-orange-700',
+                                        'snip_tool_attempt': 'bg-orange-50 border-orange-200 text-orange-700',
+                                    }
+                                    const defaultSeverity = 'bg-blue-50 border-blue-200 text-blue-700'
+
+                                    if (grouped.length === 0) return (
+                                        <p className="text-sm text-gray-500 italic text-center py-4">No violations recorded.</p>
+                                    )
+
+                                    return grouped.map((act, idx) => {
+                                        const severity = severityMap[act.type] || defaultSeverity
+                                        const [bg, border, text] = severity.split(' ')
+                                        return (
+                                            <div key={idx} className={`flex gap-3 p-3 rounded-lg border ${bg} ${border}`}>
+                                                <div className="flex-1">
+                                                    <div className="flex items-center justify-between gap-2">
+                                                        <div className="flex items-center gap-2">
+                                                            <span className={`font-semibold text-sm ${text}`}>
+                                                                {labelMap[act.type] || act.type}
+                                                            </span>
+                                                            {act.count > 1 && (
+                                                                <span className="px-2 py-0.5 bg-gray-200 text-gray-700 rounded-full text-xs font-bold">
+                                                                    ×{act.count}
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                        {act.timestamp && (
+                                                            <span className="text-gray-400 text-xs font-mono">
+                                                                {new Date(act.timestamp).toLocaleTimeString()}
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                    <p className="text-gray-500 text-xs mt-0.5">{act.details}</p>
                                                 </div>
-                                                <p className="text-gray-500 text-xs mt-0.5">{act.details}</p>
+                                            </div>
+                                        )
+                                    })
+                                })()}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Device Info Modal */}
+            {selectedAttemptForInfo && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
+                    <div className="bg-white rounded-2xl shadow-xl border border-gray-200 w-full max-w-md overflow-hidden flex flex-col">
+                        <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+                            <div className="flex items-center gap-3">
+                                <div className="p-2 bg-blue-100 rounded-lg">
+                                    <Monitor className="w-5 h-5 text-blue-600" />
+                                </div>
+                                <div>
+                                    <h3 className="font-bold text-gray-900">Device & Network</h3>
+                                    <p className="text-xs text-gray-500">{selectedAttemptForInfo.student_name}</p>
+                                </div>
+                            </div>
+                            <button onClick={() => setSelectedAttemptForInfo(null)} className="p-2 hover:bg-gray-200 rounded-lg text-gray-400 hover:text-gray-600">
+                                <XCircle className="w-5 h-5" />
+                            </button>
+                        </div>
+
+                        <div className="p-6">
+                            <div className="space-y-4">
+                                <div className="p-4 bg-gray-50 rounded-xl border border-gray-200">
+                                    <div className="flex items-center gap-3 mb-2">
+                                        <div className="p-2 bg-white rounded-lg border border-gray-100 shadow-sm">
+                                            <Globe className="w-5 h-5 text-gray-500" />
+                                        </div>
+                                        <div>
+                                            <div className="text-xs text-gray-500 font-medium uppercase">IP Address</div>
+                                            <div className="text-lg font-mono font-semibold text-gray-900">
+                                                {(selectedAttemptForInfo as any).ip_address === '::1' || (selectedAttemptForInfo as any).ip_address === '127.0.0.1'
+                                                    ? 'Local Network'
+                                                    : ((selectedAttemptForInfo as any).ip_address || 'Unknown')}
                                             </div>
                                         </div>
-                                    ))
-                                ) : (
-                                    <p className="text-sm text-gray-500 italic text-center py-4">No specific timeline events logged.</p>
-                                )}
+                                    </div>
+                                </div>
+
+                                <div className="p-4 bg-gray-50 rounded-xl border border-gray-200">
+                                    <div className="flex items-center gap-3 mb-2">
+                                        <div className="p-2 bg-white rounded-lg border border-gray-100 shadow-sm">
+                                            <Monitor className="w-5 h-5 text-gray-500" />
+                                        </div>
+                                        <div>
+                                            <div className="text-xs text-gray-500 font-medium uppercase">Device Info</div>
+                                            <div className="text-sm font-semibold text-gray-900">
+                                                {(() => {
+                                                    const ua = (selectedAttemptForInfo as any).user_agent || ''
+                                                    if (!ua) return 'Unknown Device'
+
+                                                    let browser = 'Unknown Browser'
+                                                    let os = 'Unknown OS'
+
+                                                    if (ua.includes('Chrome') && !ua.includes('Edg')) browser = 'Chrome'
+                                                    else if (ua.includes('Edg')) browser = 'Edge'
+                                                    else if (ua.includes('Firefox')) browser = 'Firefox'
+                                                    else if (ua.includes('Safari') && !ua.includes('Chrome')) browser = 'Safari'
+
+                                                    if (ua.includes('Windows')) os = 'Windows'
+                                                    else if (ua.includes('Mac OS')) os = 'macOS'
+                                                    else if (ua.includes('Android')) os = 'Android'
+                                                    else if (ua.includes('iPhone') || ua.includes('iPad')) os = 'iOS'
+                                                    else if (ua.includes('Linux')) os = 'Linux'
+
+                                                    return `${browser} • ${os}`
+                                                })()}
+                                            </div>
+                                            <div className="text-xs text-gray-500 mt-1 line-clamp-2" title={(selectedAttemptForInfo as any).user_agent}>
+                                                {(selectedAttemptForInfo as any).user_agent}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>

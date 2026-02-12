@@ -33,6 +33,8 @@ export async function GET(
             .from('student_attempts')
             .select(`
                 *,
+                ip_address,
+                user_agent,
                 exam:exams (
                     id,
                     title,

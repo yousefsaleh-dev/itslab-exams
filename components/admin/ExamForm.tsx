@@ -46,7 +46,7 @@ export default function ExamForm({ initialData, isEditing = false }: ExamFormPro
     // Settings
     const [shuffleQuestions, setShuffleQuestions] = useState(initialData?.exam?.shuffle_questions ?? true)
     const [shuffleOptions, setShuffleOptions] = useState(initialData?.exam?.shuffle_options ?? true)
-    const [showResults, setShowResults] = useState(initialData?.exam?.show_results ?? true)
+    const [showResults, setShowResults] = useState(initialData?.exam?.show_results ?? false)
 
     // Security
     const [maxExits, setMaxExits] = useState(initialData?.exam?.max_exits || 3)
@@ -344,7 +344,7 @@ export default function ExamForm({ initialData, isEditing = false }: ExamFormPro
                     <div className="p-6 grid grid-cols-1 md:grid-cols-3 gap-6">
                         <div className="md:col-span-3 grid grid-cols-1 sm:grid-cols-3 gap-4">
                             <div className="p-4 bg-gray-50 rounded-lg border border-gray-100">
-                                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Shuffle</label>
+                                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Shuffle & Results</label>
                                 <div className="space-y-3">
                                     <label className="flex items-center gap-2 cursor-pointer">
                                         <input type="checkbox" checked={shuffleQuestions} onChange={e => setShuffleQuestions(e.target.checked)} className="rounded border-gray-300 text-black focus:ring-black" />
@@ -353,6 +353,10 @@ export default function ExamForm({ initialData, isEditing = false }: ExamFormPro
                                     <label className="flex items-center gap-2 cursor-pointer">
                                         <input type="checkbox" checked={shuffleOptions} onChange={e => setShuffleOptions(e.target.checked)} className="rounded border-gray-300 text-black focus:ring-black" />
                                         <span className="text-sm font-medium text-gray-700">Shuffle Options</span>
+                                    </label>
+                                    <label className="flex items-center gap-2 cursor-pointer">
+                                        <input type="checkbox" checked={showResults} onChange={e => setShowResults(e.target.checked)} className="rounded border-gray-300 text-black focus:ring-black" />
+                                        <span className="text-sm font-medium text-gray-700">Show Results to Student</span>
                                     </label>
                                 </div>
                             </div>

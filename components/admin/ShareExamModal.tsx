@@ -21,17 +21,15 @@ export default function ShareExamModal({ isOpen, onClose, examData }: ShareExamM
     if (!isOpen) return null
 
     const baseUrl = typeof window !== 'undefined' ? window.location.origin : ''
-    // Add access code param if exists to auto-fill for student
-    const examLink = `${baseUrl}/exam/${examData.id}${examData.accessCode ? `?code=${examData.accessCode}` : ''}`
+    const examLink = `${baseUrl}/exam/${examData.id}`
 
-    // Format text for WhatsApp
     const shareText = `*New Exam: ${examData.title}*
 
-⏳ Duration: ${examData.duration} mins
-❓ Questions: ${examData.questionsCount}
+Duration: ${examData.duration} mins
+Questions: ${examData.questionsCount}
 
-🔗 Link: ${examLink}
-${examData.accessCode ? `🔑 Access Code: ${examData.accessCode}` : ''}
+Link: ${examLink}
+${examData.accessCode ? `Access Code: ${examData.accessCode}` : ''}
 
 Good luck! 🚀`
 
